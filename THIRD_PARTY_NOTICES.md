@@ -35,6 +35,8 @@ SOFTWARE.
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) (Unlicense) and [FFmpeg](https://ffmpeg.org/) (GPL build from
   [yt-dlp/FFmpeg-Builds](https://github.com/yt-dlp/FFmpeg-Builds)), downloaded into `data/tools` the first time game
   clips are made.
+- [OpenSave](https://github.com/Liquid-co/OpenSave) (MIT), for cloud saves: downloaded from its own releases into
+  `data/tools/opensave` only when cloud saves are switched on, and run in the background while they are.
 - Emulators you install from Harbour (RMG, PCSX2, Dolphin, melonDS and the rest in `emulators.js`) are downloaded
   from each project's own official releases into the `Emulators` folder, under their own licences. Harbour includes
   none of them.

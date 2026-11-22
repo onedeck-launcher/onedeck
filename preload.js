@@ -9,6 +9,7 @@ const call = async (ch, ...args) => {
 const on = channel => fn => ipcRenderer.on(channel, (_e, p) => fn(p));
 
 contextBridge.exposeInMainWorld('api', {
+  platform: process.platform,
   // settings and library
   getConfig: () => call('config:get'),
   setConfig: cfg => call('config:set', cfg),
@@ -56,6 +57,7 @@ contextBridge.exposeInMainWorld('api', {
   installDirs: () => call('harbour:installDirs'),
   pickInstallDir: (kind, opts) => call('harbour:pickInstallDir', kind, opts),
   setInstallDir: options => call('harbour:setInstallDir', options),
+  makeWelcomeFolders: () => call('harbour:makeWelcomeFolders'),
   setEmulator: options => call('harbour:setEmulator', options),
   setSystemEmulator: options => call('harbour:setSystemEmulator', options),
   setEmulatorSource: options => call('harbour:setEmulatorSource', options),
@@ -66,12 +68,28 @@ contextBridge.exposeInMainWorld('api', {
   installEmulator: id => call('harbour:installEmulator', id),
   selfStatus: force => call('harbour:selfStatus', force),
   selfUpdate: () => call('harbour:selfUpdate'),
+  sendFeedback: f => call('feedback:send', f),
+  pauseDownload: (key, on) => call('downloads:pause', { key, on }),
+  // cloud saves (OpenSave)
+  saves: {
+    status: () => call('saves:status'), states: () => call('saves:states'), enable: () => call('saves:enable'), disable: () => call('saves:disable'),
+    newCode: () => call('saves:newCode'), joinCode: code => call('saves:joinCode', code), link: peer => call('saves:link', peer),
+    approve: id => call('saves:approve', id), reject: id => call('saves:reject', id), unlink: id => call('saves:unlink', id),
+    leaveCode: () => call('saves:leaveCode'), suggest: title => call('saves:suggest', title), pickFolder: title => call('saves:pickFolder', title),
+    track: o => call('saves:track', o), untrack: id => call('saves:untrack', id), place: o => call('saves:place', o),
+    decline: id => call('saves:decline', id), resolve: o => call('saves:resolve', o), syncNow: () => call('saves:syncNow'),
+    openFolder: p => call('saves:openFolder', p), useFolder: () => call('saves:useFolder'), dropbox: () => call('saves:dropbox'),
+    disconnectCloud: () => call('saves:disconnectCloud'), onProgress: on('saves:progress'),
+  },
   // recomp updates
   recompGet: id => call('recomp:get', id),
   recompSet: opts => call('recomp:set', opts),
   recompCheck: (id, force) => call('recomp:check', id, force),
   recompCheckAll: force => call('recomp:checkAll', force),
   recompUpdate: id => call('recomp:update', id),
+  runPortLauncher: id => call('recomp:runLauncher', id),
+  whatsNew: () => call('harbour:whatsNew'), notes: () => call('harbour:notes'),
+  onRecheck: on('recomp:recheck'),
   recompOpenPage: id => call('recomp:openPage', id),
   onRecompProgress: on('recomp:progress'),
   // artwork and videos

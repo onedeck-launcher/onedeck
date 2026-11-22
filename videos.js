@@ -58,11 +58,13 @@ function matches(gameTitle, videoTitle, systemName = '') {
 
 function createVideoService({ dataDir, ghJson, download, extract, sha256File, defenderScan, getGames, getSystemName, lookup, log, emit }) {
   const toolsDir = path.join(dataDir, 'tools');
-  const ytdlp = path.join(toolsDir, 'yt-dlp.exe');
+  // The tools' own builds for this system: Windows .exe files, or Linux programs (no ending).
+  const win = process.platform === 'win32', ext = win ? '.exe' : '';
+  const ytdlp = path.join(toolsDir, 'yt-dlp' + ext);
   const ffDir = path.join(toolsDir, 'ffmpeg');
   let job = null, cancelled = false;
 
-  const toolsReady = () => fs.existsSync(ytdlp) && fs.existsSync(path.join(ffDir, 'ffmpeg.exe')) && fs.existsSync(path.join(ffDir, 'ffprobe.exe'));
+  const toolsReady = () => fs.existsSync(ytdlp) && fs.existsSync(path.join(ffDir, 'ffmpeg' + ext)) && fs.existsSync(path.join(ffDir, 'ffprobe' + ext));
   const update = patch => { job = { ...job, ...patch }; emit({ ...job }); };
 
   // One release asset: downloaded, checked against GitHub's sha256, scanned, then handed back.
@@ -87,16 +89,19 @@ function createVideoService({ dataDir, ghJson, download, extract, sha256File, de
     const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'harbour-tools-'));
     try {
       await fsp.mkdir(toolsDir, { recursive: true });
-      if (!fs.existsSync(ytdlp)) await fsp.copyFile(await fetchAsset('yt-dlp/yt-dlp', 'yt-dlp.exe', tmp), ytdlp);
-      if (!fs.existsSync(path.join(ffDir, 'ffmpeg.exe'))) {
-        const zip = await fetchAsset('yt-dlp/FFmpeg-Builds', 'ffmpeg-master-latest-win64-gpl-shared.zip', tmp);
+      if (!fs.existsSync(ytdlp)) { await fsp.copyFile(await fetchAsset('yt-dlp/yt-dlp', win ? 'yt-dlp.exe' : 'yt-dlp_linux', tmp), ytdlp); await fsp.chmod(ytdlp, 0o755); }
+      if (!fs.existsSync(path.join(ffDir, 'ffmpeg' + ext))) {
+        const zip = await fetchAsset('yt-dlp/FFmpeg-Builds', win ? 'ffmpeg-master-latest-win64-gpl-shared.zip' : 'ffmpeg-master-latest-linux64-gpl.tar.xz', tmp);
         update({ stage: 'Unpacking FFmpeg…' });
         const out = path.join(tmp, 'ff'); await fsp.mkdir(out);
         await extract(zip, out);
-        const find = dir => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, e.name); if (e.isDirectory()) { const r = find(p); if (r) return r; } else if (e.name.toLowerCase() === 'ffmpeg.exe') return dir; } return null; };
-        const bin = find(out); if (!bin) throw new Error('FFmpeg download had no ffmpeg.exe');
+        const find = dir => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, e.name); if (e.isDirectory()) { const r = find(p); if (r) return r; } else if (e.name.toLowerCase() === 'ffmpeg' + ext) return dir; } return null; };
+        const bin = find(out); if (!bin) throw new Error('FFmpeg download had no ffmpeg' + ext);
         await fsp.rm(ffDir, { recursive: true, force: true }); await fsp.mkdir(ffDir, { recursive: true });
-        for (const f of fs.readdirSync(bin)) if (/\.(exe|dll)$/i.test(f) && !/^ffplay/i.test(f)) await fsp.copyFile(path.join(bin, f), path.join(ffDir, f));
+        for (const f of fs.readdirSync(bin)) if ((win ? /\.(exe|dll)$/i : /^ff(mpeg|probe)$/).test(f) && !/^ffplay/i.test(f)) {
+          await fsp.copyFile(path.join(bin, f), path.join(ffDir, f));
+          if (!win) await fsp.chmod(path.join(ffDir, f), 0o755);
+        }
       }
       log('video tools ready');
     } finally { fsp.rm(tmp, { recursive: true, force: true }).catch(() => {}); }

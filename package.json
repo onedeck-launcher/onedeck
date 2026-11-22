@@ -1,7 +1,7 @@
 {
-  "name": "harbour",
-  "version": "0.1.4",
-  "description": "Harbour: a lightweight game launcher for recomps, ports and emulators.",
+  "name": "onedeck",
+  "version": "0.2.0",
+  "description": "OneDeck: a game launcher for PC ports and emulators.",
   "license": "MIT-0",
   "main": "main.js",
   "scripts": {
@@ -15,9 +15,9 @@
   "author": {
     "name": "goodthanksdev"
   },
-  "productName": "Harbour",
+  "productName": "OneDeck",
   "repository": {
     "type": "git",
-    "url": "https://github.com/goodthanksdev/harbour.git"
+    "url": "https://github.com/onedeck-launcher/onedeck.git"
   }
 }

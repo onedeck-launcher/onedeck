@@ -1,0 +1,32 @@
+name: Bug report
+description: Something broke or didn't work right.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: And what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How do we make it happen?
+      placeholder: "1. Open the N64 tab\n2. Press Play on…\n3. …"
+  - type: input
+    id: game
+    attributes:
+      label: Game, port or emulator (if it's about one)
+  - type: input
+    id: version
+    attributes:
+      label: OneDeck version
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else? Screenshots help.

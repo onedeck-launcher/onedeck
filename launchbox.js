@@ -80,7 +80,7 @@ async function openZipEntry(zipFile, wanted) {
         const raw = fs.createReadStream(zipFile, { start: dataStart, end: dataStart + packed - 1 });
         if (method === 0) return raw;
         if (method === 8) return raw.pipe(zlib.createInflateRaw());
-        throw new Error('The LaunchBox database uses a compression Harbour cannot read.');
+        throw new Error('The LaunchBox database uses a compression OneDeck cannot read.');
       }
       at += 46 + nameLength + dir.readUInt16LE(at + 30) + dir.readUInt16LE(at + 32);
     }
@@ -177,7 +177,7 @@ function createLaunchBox({ dataDir, normalize, download, onStatus = () => {},
 
   async function readIndex() {
     const index = JSON.parse(await fsp.readFile(indexFile, 'utf8'));
-    if (index?.version !== INDEX_VERSION) throw new Error('The LaunchBox index is from another Harbour version.');
+    if (index?.version !== INDEX_VERSION) throw new Error('The LaunchBox index is from another OneDeck version.');
     return index;
   }
   const ageOfIndex = () => { try { return Date.now() - fs.statSync(indexFile).mtimeMs; } catch { return Infinity; } };

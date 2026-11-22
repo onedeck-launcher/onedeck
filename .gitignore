@@ -22,3 +22,6 @@ Emulators/
 
 # PC ports Harbour installed (when run from source)
 Ports/
+
+# Saves of the emulators OneDeck set up (when run from source)
+Saves/

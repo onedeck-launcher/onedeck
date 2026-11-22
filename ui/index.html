@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Harbour</title>
+  <title>OneDeck</title>
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file: data:; media-src 'self' file:; style-src 'self' 'unsafe-inline'; script-src 'self'" />
   <link rel="stylesheet" href="harbour.css" />
 </head>
@@ -17,27 +17,29 @@
   </div>
 
   <header id="top" class="chrome">
-    <div class="brand"><img src="assets/brand/harbour-mark.svg" alt="" /><span class="word" data-text="HARBOUR">HARBOUR</span></div>
-    <nav id="tabsView" aria-label="Consoles"><div id="tabs"></div></nav>
+    <div class="brand"><span class="mark" aria-hidden="true"><svg viewBox="12.5 14.5 90 90"><rect class="back" x="33" y="17" width="56" height="78" rx="9"/><rect class="front" x="26" y="24" width="56" height="78" rx="9"/><path class="play" d="M47.5 51 L67.5 63 L47.5 75 Z"/></svg></span><span class="word"><span class="light" id="brandLead">ONE</span><span id="brandWord">DECK</span></span><span class="beta" title="OneDeck is in beta: thanks for trying it, and for telling us what breaks (the speech bubble, top left)">Beta</span></div>
+    <span id="clock"></span>
+    <button id="btnFeedback" class="icon-btn" title="Send feedback" aria-label="Send feedback"><svg viewBox="0 0 24 24" width="0.9em" height="0.9em" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-5 4.5V16h0a1 1 0 0 1-1-1z"/><path d="M8.5 8.5h7M8.5 11.5h4.5"/></svg></button>
+    <span class="tabkey l" data-pad-inline="lb" aria-hidden="true"></span><nav id="tabsView" aria-label="Consoles"><div id="tabs"></div></nav><span class="tabkey r" data-pad-inline="rb" aria-hidden="true"></span>
     <div class="top-right">
-      <button id="updatePill" class="pill new" hidden title="See and install updates"></button>
-      <span id="clock"></span>
-      <button id="btnSearch" class="icon-btn" title="Search (Ctrl+F)" aria-label="Search"><svg viewBox="0 0 24 24" width="0.9em" height="0.9em" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg></button>
-      <button id="btnView" class="icon-btn" title="View (V)" aria-label="Change view"></button>
+      <button id="updatePill" data-pad-inline="back" class="pill new" hidden title="See and install updates"><span class="ico"></span><span class="txt"></span><span class="bar"></span></button>
+      <button id="btnSearch" data-pad="l3" class="icon-btn" title="Search (Ctrl+F)" aria-label="Search"><svg viewBox="0 0 24 24" width="0.9em" height="0.9em" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg></button>
+      <button id="btnView" data-pad="r3" class="icon-btn" title="View (V)" aria-label="Change view"></button>
       <button id="btnAdd" class="icon-btn" title="Add a game or emulator" aria-label="Add a game or emulator">＋</button>
-      <button id="btnSettings" class="icon-btn" title="Settings (Start)" aria-label="Settings">⚙</button>
     </div>
   </header>
+  <!-- Settings sit in the bottom-right corner, on the line with the button hints -->
+  <div id="corner" class="chrome"><button id="btnSettings" data-pad="start" class="icon-btn" title="Settings (Start)" aria-label="Settings">⚙</button></div>
 
   <main id="info" class="chrome">
     <div id="titleWrap"><img id="gLogo" alt="" hidden /><h1 id="gTitle"></h1></div>
     <div id="gMeta" class="meta"></div>
     <p id="gDesc"></p>
     <div id="gActions" class="actions">
-      <button id="btnPlay" class="primary"><span class="tri"></span>Play</button>
+      <button id="btnPlay" class="primary" data-pad-inline="a"><span class="tri"></span>Play</button>
       <button id="btnPort" class="primary" hidden>Install PC port</button><span id="portTier" hidden></span>
-      <button id="btnUpdate" hidden></button>
-      <button id="btnMore" title="More (X)">•••</button>
+      <button id="btnUpdate" data-pad="y" hidden></button>
+      <button id="btnMore" data-pad="x" title="More (X)">•••</button>
     </div>
   </main>
 
@@ -58,65 +60,135 @@
 
   <!-- First start, when there's nothing to show yet -->
   <dialog id="welcomeDlg">
-    <img class="welcome-mark" src="assets/brand/harbour-mark.svg" alt="" />
-    <h2>Welcome to Harbour</h2>
+    <img class="welcome-mark" src="assets/brand/onedeck-mark.svg" alt="" />
+    <h2>Welcome to OneDeck</h2>
     <!-- First run: a few choices, all in Settings later too -->
     <div id="welcomeSetup">
       <p class="note">A few choices first. You can change any of them later in Settings.</p>
       <div class="welcome-set">
         <div class="set-row"><span>Download media automatically<small>Box art, backgrounds, logos and gameplay clips for every game (you can manage your media later in Settings)</small></span><select id="wAuto"><option value="1">On</option><option value="0">Off</option></select></div>
-        <div class="set-row"><span>Library view</span><select id="wView"><option value="shelf">Shelf</option><option value="tiles">Tiles</option><option value="list">List</option></select></div>
+        <div class="set-row"><span>Library view</span><select id="wView"><option value="shelf">Deck</option><option value="tiles">Tiles</option><option value="list">List</option></select></div>
+        <div class="set-row"><span>Games (ROMs) go in<small>A folder per console is made inside: drop your games in and they show up</small></span><span class="dir-pick"><small id="wDirGames"></small><button type="button" id="wDirGamesBtn">Change…</button></span></div>
         <div class="set-row"><span>PC ports install to</span><span class="dir-pick"><small id="wDirPorts"></small><button type="button" id="wDirPortsBtn">Change…</button></span></div>
         <div class="set-row"><span>Emulators install to</span><span class="dir-pick"><small id="wDirEmus"></small><button type="button" id="wDirEmusBtn">Change…</button></span></div>
       </div>
-      <div class="dlg-actions"><button type="button" id="welcomeCancel">Cancel</button><button type="button" id="welcomeNext" class="primary">Next</button></div>
+      <div class="dlg-actions"><button type="button" id="welcomeCancel" data-close>Cancel</button><button type="button" id="welcomeNext" class="primary">Next</button></div>
     </div>
     <div id="welcomeStart">
     <p class="note">Add your stuff.</p>
     <div class="choices">
-      <button type="button" class="choice" data-wkind="roms"><b>Games (ROMs)</b><span>A folder of game files. Harbour sorts them by console.</span><i class="done-tick">✓</i></button>
-      <button type="button" class="choice" data-wkind="port"><b>PC port / recomp</b><span>Its GitHub page and your game file. Harbour does the rest.</span><i class="done-tick">✓</i></button>
+      <button type="button" class="choice" data-wkind="roms"><b>Games (ROMs)</b><span>A folder of game files. OneDeck sorts them by console.</span><i class="done-tick">✓</i></button>
+      <button type="button" class="choice" data-wkind="port"><b>PC port / recomp</b><span>Its GitHub page and your game file. OneDeck does the rest.</span><i class="done-tick">✓</i></button>
       <button type="button" class="choice" data-wkind="emu"><b>Emulator</b><span>Install a well-known one in a click, or add one you have.</span><i class="done-tick">✓</i></button>
     </div>
-    <div class="dlg-actions"><button type="button" id="welcomeBack">Back</button><button type="button" id="welcomeLater" class="primary">Done</button></div>
+    <div class="dlg-actions"><button type="button" id="welcomeBack" data-back>Back</button><button type="button" id="welcomeLater" class="primary">Done</button></div>
     </div>
   </dialog>
 
   <dialog id="settings">
     <h2>Settings</h2>
-    <h3>Library</h3>
-    <div class="set-row"><span>Emulators &amp; game folders</span><button id="setEmus">Manage</button></div>
-    <div class="set-row"><span>Updates</span><button id="setCheck">Check now</button></div>
-    <div class="set-row"><span>Undocked games</span><button id="setUnhide">Redock</button></div>
-    <div class="set-row"><span>PC ports install to</span><span class="dir-pick"><small id="dirPorts"></small><button id="setDirPorts">Change…</button></span></div>
-    <div class="set-row"><span>Emulators install to</span><span class="dir-pick"><small id="dirEmus"></small><button id="setDirEmus">Change…</button></span></div>
-    <h3>Media</h3>
-    <div class="set-row"><span>Download automatically</span><select id="setAutoMedia"><option value="1">On</option><option value="0">Off</option></select></div>
-    <div class="set-row media-row" data-kind="box"><span>Box art</span><span class="btn-pair"><select class="media-on"><option value="1">On</option><option value="0">Off</option></select><button class="media-manage">Manage</button><button class="media-clear">Delete all</button></span></div>
-    <div class="set-row media-row" data-kind="background"><span>Background art</span><span class="btn-pair"><select class="media-on"><option value="1">On</option><option value="0">Off</option></select><button class="media-manage">Manage</button><button class="media-clear">Delete all</button></span></div>
-    <div class="set-row media-row" data-kind="video"><span>Videos</span><span class="btn-pair"><select class="media-on"><option value="1">On</option><option value="0">Off</option></select><button class="media-manage">Manage</button><button class="media-clear">Delete all</button></span></div>
-    <div class="set-row"><span>Unused media</span><button id="setUnused">Delete unused</button></div>
-    <div class="set-row"><span>Video sound</span><span class="slider"><input type="range" id="setVidVol" min="0" max="100" step="5" /><output id="setVidVolOut"></output></span></div>
-    <h3>Interface</h3>
-    <div class="set-row"><span>Library view</span><select id="setView"><option value="shelf">Shelf</option><option value="tiles">Tiles</option><option value="list">List</option></select></div>
-    <div class="set-row"><span>Cover size</span><span class="slider"><input type="range" id="setCover" min="80" max="160" step="10" /><output id="setCoverOut"></output></span></div>
-    <div class="set-row"><span>UI sounds</span><span class="slider"><input type="range" id="setUiVol" min="0" max="100" step="5" /><output id="setUiVolOut"></output></span></div>
-    <div class="set-row"><span>Screensaver</span><select id="setIdle"><option value="0">Off</option><option value="60">1 minute</option><option value="120">2 minutes</option><option value="300">5 minutes</option></select></div>
-    <div class="set-row"><span>Fullscreen</span><button id="setFull">F11</button></div>
-    <div class="dlg-actions"><button id="setQuit">Quit Harbour</button><button id="setClose" class="primary">Close</button></div>
+    <div class="set-body">
+      <div class="set-tabs" role="tablist" aria-label="Settings">
+        <div class="set-tabkeys" aria-hidden="true"><span data-pad-inline="lb"></span><span data-pad-inline="rb"></span><small>Tabs</small></div>
+        <button type="button" role="tab" data-page="display">Display</button>
+        <button type="button" role="tab" data-page="sound">Sound</button>
+        <button type="button" role="tab" data-page="library">Library</button>
+        <button type="button" role="tab" data-page="saves">Cloud saves</button>
+        <button type="button" role="tab" data-page="folders">Folders</button>
+        <button type="button" role="tab" data-page="media">Media</button>
+        <button type="button" role="tab" data-page="about">About</button>
+      </div>
+      <div class="set-pages">
+        <section class="set-page" data-page="display" role="tabpanel" aria-label="Display" hidden>
+        <div class="set-row"><span>Library view</span><select id="setView"><option value="shelf">Deck</option><option value="tiles">Tiles</option><option value="list">List</option></select></div>
+        <div class="set-row"><span>Top bar size<small>The buttons, the clock and the Settings cog</small></span><span class="slider"><input type="range" id="setUi" min="80" max="160" step="10" /><output id="setUiOut"></output></span></div>
+        <div class="set-row"><span>Cover size</span><span class="slider"><input type="range" id="setCover" min="80" max="160" step="10" /><output id="setCoverOut"></output></span></div>
+        <div class="set-row"><span>Console order</span><select id="setTabSort"><option value="release">Release date (oldest first)</option><option value="newest">Release date (newest first)</option><option value="name">A–Z</option><option value="most">Most games</option></select></div>
+        <div class="set-row"><span>Game order</span><select id="setGameSort"><option value="name">A–Z</option><option value="recent">Recently played</option><option value="played">Most played</option><option value="year">Release year</option></select></div>
+        <div class="set-row"><span>Fullscreen</span><button id="setFull">F11</button></div>
+        <div class="set-row"><span>Screensaver</span><select id="setIdle"><option value="0">Off</option><option value="60">1 minute</option><option value="120">2 minutes</option><option value="300">5 minutes</option></select></div>
+        </section>
+        <section class="set-page" data-page="sound" role="tabpanel" aria-label="Sound" hidden>
+        <div class="set-row"><span>UI sounds</span><span class="slider"><input type="range" id="setUiVol" min="0" max="100" step="5" /><output id="setUiVolOut"></output></span></div>
+        <div class="set-row"><span>Video sound</span><span class="slider"><input type="range" id="setVidVol" min="0" max="100" step="5" /><output id="setVidVolOut"></output></span></div>
+        </section>
+        <section class="set-page" data-page="library" role="tabpanel" aria-label="Library" hidden>
+        <div class="set-row"><span>Game folders &amp; emulators</span><button id="setEmus">Manage</button></div>
+        <div class="set-row"><span>Updates</span><button id="setCheck">Check now</button></div>
+        <div class="set-row"><span>Install updates automatically<small>Ports and emulators, never while you're playing</small></span><select id="setAutoUpd"><option value="1">On</option><option value="0">Off</option></select></div>
+        <div class="set-row"><span>Undocked games</span><button id="setUnhide">Redock</button></div>
+        </section>
+        <section class="set-page" id="savesPage" data-page="saves" role="tabpanel" aria-label="Cloud saves" hidden>
+        <div class="sv-head"><p class="note" id="savesStatus"></p><button id="savesToggle" type="button"></button></div>
+        <div id="savesBody" class="emu-catalog"></div>
+        </section>
+        <section class="set-page" data-page="folders" role="tabpanel" aria-label="Folders" hidden>
+        <div class="set-row"><span>Games (ROMs) go in</span><span class="dir-pick"><small id="dirGames"></small><button id="setDirGames">Change…</button></span></div>
+        <div class="set-row"><span>PC ports install to</span><span class="dir-pick"><small id="dirPorts"></small><button id="setDirPorts">Change…</button></span></div>
+        <div class="set-row"><span>Emulators install to</span><span class="dir-pick"><small id="dirEmus"></small><button id="setDirEmus">Change…</button></span></div>
+        </section>
+        <section class="set-page" data-page="media" role="tabpanel" aria-label="Media" hidden>
+        <div class="set-row"><span>Download automatically</span><select id="setAutoMedia"><option value="1">On</option><option value="0">Off</option></select></div>
+        <div class="set-row media-row" data-kind="box"><span>Box art</span><span class="btn-pair"><select class="media-on"><option value="1">On</option><option value="0">Off</option></select><button class="media-manage">Manage</button><button class="media-clear">Delete all</button></span></div>
+        <div class="set-row media-row" data-kind="background"><span>Background art</span><span class="btn-pair"><select class="media-on"><option value="1">On</option><option value="0">Off</option></select><button class="media-manage">Manage</button><button class="media-clear">Delete all</button></span></div>
+        <div class="set-row media-row" data-kind="video"><span>Videos</span><span class="btn-pair"><select class="media-on"><option value="1">On</option><option value="0">Off</option></select><button class="media-manage">Manage</button><button class="media-clear">Delete all</button></span></div>
+        <div class="set-row"><span>Unused media</span><button id="setUnused">Delete unused</button></div>
+        </section>
+        <section class="set-page" data-page="about" role="tabpanel" aria-label="About" hidden>
+        <div class="set-row"><span>Found a bug, or have an idea?<small>Tell us straight from OneDeck. No account needed.</small></span><button id="setFeedback">Send feedback</button></div>
+        <div class="set-row"><span>What's new<small>This version's changes</small></span><button id="setNotes">Show</button></div>
+        <div class="set-row"><span>The emulators and tools OneDeck uses<small>Each one's maker, licence and website</small></span><button id="setCredits">Show</button></div>
+        <p class="note" id="setVersion"></p>
+        </section>
+      </div>
+    </div>
+    <div class="dlg-actions"><button id="setQuit">Quit OneDeck</button><button id="setClose" data-close class="primary">Close</button></div>
   </dialog>
 
-  <!-- Everything with an update, and "Update all" -->
+
+  <!-- Feedback (top bar, and Settings) -->
+  <dialog id="feedbackDlg">
+    <h2>Send feedback</h2>
+    <div class="fb-kinds" role="radiogroup" aria-label="What is it?">
+      <button type="button" data-kind="bug" role="radio">Bug</button><button type="button" data-kind="idea" role="radio">Idea</button><button type="button" data-kind="other" role="radio">Something else</button>
+    </div>
+    <textarea id="fbText" rows="6" maxlength="5000" placeholder="What happened, or what would you like?"></textarea>
+    <div class="dlg-actions"><button id="fbCancel" data-close type="button">Cancel</button><button id="fbSend" class="primary" type="button">Send</button></div>
+  </dialog>
+
+  <!-- Installing a PC port for a game whose saves already sync: its saves won't follow by themselves -->
+  <dialog id="portSavesDlg">
+    <h2>Your saves won't come with it</h2>
+    <p id="psText" class="note"></p>
+    <div class="dlg-actions"><button id="psCancel" data-close type="button">Cancel</button><button id="psOk" class="primary" type="button">Install anyway</button></div>
+  </dialog>
+
+  <!-- What's new: this version's release notes, after an update and from Settings → About -->
+  <dialog id="notesDlg">
+    <h2 id="notesTitle">What's new</h2>
+    <div id="notesBody" class="notes-body"></div>
+    <div class="dlg-actions"><button id="notesPage" type="button">Release page</button><button id="notesClose" class="primary" type="button" data-close>Close</button></div>
+  </dialog>
+
+  <!-- Settings → Credits -->
+  <dialog id="creditsDlg">
+    <h2>Credits</h2>
+    <p class="note">OneDeck installs each emulator from its own team's releases, under its own licence. Thanks to all of them.</p>
+    <div id="creditsList" class="emu-catalog"></div>
+    <div class="dlg-actions"><button id="creditsClose" data-close class="primary">Close</button></div>
+  </dialog>
+
+  <!-- Everything with an update: the queue, Not queued, and ones to update in their own app -->
   <dialog id="updatesDlg">
     <h2>Updates</h2>
     <div id="updList" class="upd-list"></div>
-    <p class="note">"Update all" installs everything Harbour can. The rest: update in app.</p>
-    <div class="dlg-actions"><button id="updAll" class="primary">Update all</button><button id="updClose">Close</button></div>
+    <p class="note">Updates install top to bottom. Update starts one now, ↑ moves it sooner (or back into the queue), ✕ takes it out.</p>
+    <div class="dlg-actions"><button id="updClose" data-close>Close</button></div>
   </dialog>
 
   <!-- Your emulators, and which one each console uses -->
   <dialog id="emusDlg">
-    <div class="dlg-head"><h2>Emulators &amp; game folders</h2><button id="emusAdd" type="button" class="primary">＋ Add emulators</button></div>
+    <div class="dlg-head"><h2>Game folders &amp; emulators</h2><button id="emusAdd" type="button" class="primary">＋ Add emulators</button></div>
     <h3>Which emulator each console uses</h3>
     <div id="emuConsoles" class="emu-consoles"></div>
     <h3>Game folders</h3>
@@ -128,29 +200,29 @@
     </div>
     <h3>Your emulators</h3>
     <div id="emuCards" class="emu-cards"></div>
-    <div class="dlg-actions"><button id="emusClose" class="primary">Done</button></div>
+    <div class="dlg-actions"><button id="emusClose" data-close class="primary">Done</button></div>
   </dialog>
 
   <!-- Add a game or an emulator: one question at a time -->
   <dialog id="addDlg">
     <div id="addPick">
-      <h2>Add to Harbour</h2>
+      <h2>Add to OneDeck</h2>
       <div class="choices">
-        <button type="button" class="choice" data-kind="roms"><b>Games (ROMs)</b><span>A folder of game files. Harbour sorts them by console.</span></button>
-        <button type="button" class="choice" data-kind="port"><b>PC port / recomp</b><span>Its GitHub page and your game file. Harbour does the rest.</span></button>
+        <button type="button" class="choice" data-kind="roms"><b>Games (ROMs)</b><span>A folder of game files. OneDeck sorts them by console.</span></button>
+        <button type="button" class="choice" data-kind="port"><b>PC port / recomp</b><span>Its GitHub page and your game file. OneDeck does the rest.</span></button>
         <button type="button" class="choice" data-kind="emu"><b>Emulator</b><span>Install a well-known one in a click, or add one you have.</span></button>
       </div>
-      <div class="dlg-actions"><button type="button" class="addCancel">Cancel</button></div>
+      <div class="dlg-actions"><button type="button" class="addCancel" data-close>Cancel</button></div>
     </div>
     <!-- Game files: a folder with a folder per console inside, or one console's folder -->
     <div id="addRoms" hidden>
       <h2>Add games</h2>
       <div class="choices">
-        <button type="button" class="choice" id="romsRoot"><b>Your games folder</b><span>One with a folder per console inside (N64, PS2, Switch…). Harbour finds them.</span></button>
+        <button type="button" class="choice" id="romsRoot"><b>Your games folder</b><span>One with a folder per console inside (N64, PS2, Switch…). OneDeck finds them.</span></button>
       </div>
       <div class="roms-one"><span>Or a folder for one console:</span><select id="romsConsole" aria-label="Console"></select><button type="button" id="romsOne">Choose folder…</button></div>
       <p class="note">New games added to these folders later show up by themselves.</p>
-      <div class="dlg-actions"><button type="button" class="addBack">Back</button></div>
+      <div class="dlg-actions"><button type="button" class="addBack" data-back>Back</button></div>
     </div>
     <!-- Ports to choose from (Recompendium's catalogue) -->
     <div id="addCatalog" hidden>
@@ -158,7 +230,7 @@
       <div class="cat-filters"><input id="catSearch" type="search" placeholder="Search games or ports" autocomplete="off" spellcheck="false" /><select id="catConsole" aria-label="Console"></select></div>
       <div id="portCatalog" class="emu-catalog"></div>
       <p class="note">Catalogue by <a href="https://recompendium.com/" target="_blank" rel="noopener">Recompendium</a> (CC BY-SA 4.0).</p>
-      <div class="dlg-actions"><button type="button" class="addBack">Back</button><button type="button" id="catLink">Paste a link…</button><button type="button" id="catFolder">Already installed…</button></div>
+      <div class="dlg-actions"><button type="button" class="addBack" data-back>Back</button><button type="button" id="catLink">Paste a link…</button><button type="button" id="catFolder">Already installed…</button></div>
     </div>
     <!-- A port from its GitHub page: Harbour installs it, with your game file -->
     <form id="addGit" hidden>
@@ -167,7 +239,7 @@
       <label>Your game file <small>(optional: some ports find it in their folder, the rest ask on first start)</small></label>
       <p id="gitNeeds" class="note" hidden></p>
       <div class="file-pick"><button type="button" id="gitRom">Choose…</button><span id="gitRomName" class="note">The ROM or disc it's made from</span></div>
-      <div class="dlg-actions"><button type="button" class="addBack">Back</button><button type="button" id="gitFolder">Already installed…</button><button class="primary">Install</button></div>
+      <div class="dlg-actions"><button type="button" class="addBack" data-back>Back</button><button type="button" id="gitFolder">Already installed…</button><button class="primary">Install</button></div>
     </form>
     <!-- Filled in by Harbour after you pick the folder; change anything it got wrong -->
     <form id="addPort" hidden>
@@ -176,13 +248,13 @@
       <label>Name<input name="title" autocomplete="off" spellcheck="false" /></label>
       <label>Console<select name="platform"></select></label>
       <label>GitHub page for updates<input name="repo" placeholder="not found: paste its link to get updates" autocomplete="off" spellcheck="false" /></label>
-      <div class="dlg-actions"><button type="button" class="addBack">Back</button><button class="primary">Add</button></div>
+      <div class="dlg-actions"><button type="button" class="addBack" data-back>Back</button><button class="primary">Add</button></div>
     </form>
     <!-- Well-known emulators Harbour installs and keeps updated -->
     <div id="addEmuPick" hidden>
       <h2>Add an emulator</h2>
       <div id="emuCatalog" class="emu-catalog"></div>
-      <div class="dlg-actions"><button type="button" class="addBack">Back</button><button type="button" id="emuManage">Manage emulators</button><button type="button" id="emuScan">Scan folder…</button><button type="button" id="emuOwn">One I already have…</button></div>
+      <div class="dlg-actions"><button type="button" class="addBack" data-back>Back</button><button type="button" id="emuManage">Manage emulators</button><button type="button" id="emuScan">Scan folder…</button><button type="button" id="emuOwn">One I already have…</button></div>
     </div>
     <form id="addEmu" hidden>
       <h2>Add an emulator you have</h2>
@@ -191,7 +263,7 @@
       <div id="emuSystems" class="sys-grid"></div>
       <label class="check"><input type="checkbox" name="makeDefault" checked /> Use it for those consoles</label>
       <label>Launch options <small>(advanced: {rom} is the game file)</small><input name="args" value="{rom}" autocomplete="off" spellcheck="false" /></label>
-      <div class="dlg-actions"><button type="button" class="addBack">Back</button><button class="primary">Choose program…</button></div>
+      <div class="dlg-actions"><button type="button" class="addBack" data-back>Back</button><button class="primary">Choose program…</button></div>
     </form>
   </dialog>
 
@@ -201,7 +273,7 @@
     <p class="note" id="mediaNote"></p>
     <div class="vid-tools"><input id="vidFilter" type="search" placeholder="Filter" autocomplete="off" spellcheck="false" /><button type="button" id="vidAll">Check all</button><button type="button" id="vidNone">Uncheck all</button></div>
     <div id="vidList" class="vid-list"></div>
-    <div class="dlg-actions"><button type="button" id="vidCancel">Cancel</button><button type="button" id="vidSave" class="primary">Save</button></div>
+    <div class="dlg-actions"><button type="button" id="vidCancel" data-close>Cancel</button><button type="button" id="vidSave" class="primary">Save</button></div>
   </dialog>
 
   <dialog id="searchDlg">
@@ -212,8 +284,8 @@
   <dialog id="renameDlg">
     <h2>Rename</h2>
     <form id="renameForm" method="dialog"><input name="title" autocomplete="off" spellcheck="false" />
-      <p class="note">This is also the name Harbour uses to find artwork and videos.</p>
-      <div class="dlg-actions"><button type="button" id="renameCancel">Cancel</button><button class="primary">Save</button></div></form>
+      <p class="note">This is also the name OneDeck uses to find artwork and videos.</p>
+      <div class="dlg-actions"><button type="button" id="renameCancel" data-close>Cancel</button><button class="primary">Save</button></div></form>
   </dialog>
 
   <dialog id="recompDlg">
@@ -227,7 +299,7 @@
       <label>Version you have now<input name="installedTag" placeholder="e.g. v1.0.3" autocomplete="off" spellcheck="false" /></label>
       <label>Download file pattern (optional)<input name="asset" placeholder="only if it picks the wrong file" autocomplete="off" spellcheck="false" /></label>
       <p id="rdStatus" class="note"></p>
-      <div class="dlg-actions"><button type="button" id="rdCancel">Cancel</button><button value="save" class="primary">Save</button></div>
+      <div class="dlg-actions"><button type="button" id="rdCancel" data-close>Cancel</button><button value="save" class="primary">Save</button></div>
     </form>
   </dialog>
 

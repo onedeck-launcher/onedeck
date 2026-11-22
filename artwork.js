@@ -26,7 +26,7 @@ const MAX_IMAGE_BYTES = 20 * 1048576;
 const MAX_DOWNLOAD_BYTES = 600 * 1048576;
 const PARALLEL_REQUESTS = 4;
 const REQUEST_TIMEOUT = 18000;
-const AGENT = { 'User-Agent': 'Harbour-Frontend' };
+const AGENT = { 'User-Agent': 'OneDeck-Frontend' };
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const isPng = b => b.length >= 24 && b.subarray(0, 8).equals(PNG_MAGIC);
 
@@ -115,7 +115,7 @@ function createArtworkService({ dataDir, getSystems, getGames, wants = () => tru
       }
       let bytes = Buffer.concat(parts);
       if (!isPng(bytes) && decodeImage) bytes = await decodeImage(bytes);
-      if (!isPng(bytes)) throw new Error('Artwork server did not return a picture Harbour can read');
+      if (!isPng(bytes)) throw new Error('Artwork server did not return a picture OneDeck can read');
       const w = bytes.readUInt32BE(16), h = bytes.readUInt32BE(20);
       if (!w || !h || w > 16384 || h > 16384) throw new Error('Artwork picture has an impossible size');
       return bytes;

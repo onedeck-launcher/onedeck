@@ -1,7 +1,12 @@
 // Harbour: settings, library scanning, artwork, launching, recomp updates and game videos.
-const { app, BrowserWindow, ipcMain, dialog, shell, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, nativeImage, net } = require('electron');
 if (process.platform === 'win32') app.commandLine.appendSwitch('force-high-performance-gpu');
-app.setName('Harbour');
+app.setName('OneDeck');
+// Settings kept by the window (like what's already been looked up) stay in an older folder (AnyDeck, AnyDock,
+// Harbour) when there is one.
+{ const appData = app.getPath('appData'), p = require('path'), fs = require('fs');
+  const older = ['AnyDeck', 'AnyDock', 'Harbour'].map(n => p.join(appData, n)).find(d => fs.existsSync(d));
+  if (older && !fs.existsSync(p.join(appData, 'OneDeck'))) app.setPath('userData', older); }
 if (process.platform === 'win32') app.setAppUserModelId('local.harbour.launcher');
 // Harbour stays open behind a running game. Without this, Windows reports the covered window as
 // hidden and Chromium stops reading controllers, so "hold to quit" would never be seen.
@@ -19,13 +24,22 @@ const { createArtworkService } = require('./artwork');
 const { createLaunchBox } = require('./launchbox');
 const { createVideoService } = require('./videos');
 const { CATALOG } = require('./emulators');
+const compat = require('./compat');
+const { createCloudSaves } = require('./cloudsaves');
+const { createSaveFolders } = require('./savefolders');
 
 const ROOT = __dirname;
 const PACKAGE = require('./package.json');
 const APP_VERSION = PACKAGE.version;
 // Settings, artwork, videos and logs live in data\: next to Harbour.exe in a release (so an update, which replaces
-// Harbour's own files, never touches them), or in the source folder when run from there.
-const DATA = app.isPackaged ? path.join(path.dirname(process.execPath), 'data') : path.join(ROOT, 'data');
+// Harbour's own files, never touches them), or in the source folder when run from there. The Linux AppImage is one
+// read-only file, so its data goes in an OneDeck folder in your home (with Games, Ports and Emulators beside it),
+// unless a data folder sits next to the AppImage (a portable copy, like the Windows folder).
+function appImageData() {
+  const beside = path.join(path.dirname(process.env.APPIMAGE), 'data');
+  return fs.existsSync(beside) ? beside : path.join(os.homedir(), 'OneDeck', 'data');
+}
+const DATA = !app.isPackaged ? path.join(ROOT, 'data') : process.env.APPIMAGE ? appImageData() : path.join(path.dirname(process.execPath), 'data');
 const LOG_PATH = path.join(DATA, 'logs', 'harbour.log');
 function log(...parts) {
   try {
@@ -40,7 +54,7 @@ app.on('child-process-gone', (_e, d) => log('child process gone', d));
 app.on('render-process-gone', (_e, _w, d) => log('window process gone', d));
 app.whenReady().then(() => log('ready')).catch(e => log('not ready', e?.stack || String(e)));
 const CONFIG_PATH = path.join(DATA, 'config.json');
-const UA = { 'User-Agent': 'Harbour', Accept: 'application/vnd.github+json' };
+const UA = { 'User-Agent': 'OneDeck', Accept: 'application/vnd.github+json' };
 
 // ---------- Systems ----------
 // Each console: its file types, colour (for cards without art) and libretro name (for artwork).
@@ -70,9 +84,9 @@ const DEFAULT_SYSTEMS = [
   { id: 'genesis', name: 'Sega Genesis', color: '#1b1b1b', extensions: ['.md', '.gen', '.smd', '.zip'], emulator: '', libretro: 'Sega - Mega Drive - Genesis' },
   { id: 'xbox', name: 'Xbox', color: '#1c8a2e', extensions: ['.iso', '.xiso'], emulator: '', libretro: 'Microsoft - Xbox' },
   { id: 'x360', name: 'Xbox 360', color: '#7cbb00', extensions: ['.iso', '.xex', '.zar'], emulator: '', libretro: 'Microsoft - Xbox 360' },
-  // PC: a folder of shortcuts (.lnk, Steam .url) or game programs. Games start directly, no emulator.
+  // PC: a folder of shortcuts (.lnk, Steam .url, Linux .desktop) or game programs. Games start directly, no emulator.
   { id: 'recomp', name: 'Recomp', color: '#a685ff', extensions: ['.exe'], emulator: '', direct: true },
-  { id: 'pc', name: 'PC Games', color: '#3b82f6', extensions: ['.lnk', '.url', '.exe'], emulator: '', direct: true },
+  { id: 'pc', name: 'PC Games', color: '#3b82f6', extensions: ['.lnk', '.url', '.exe', '.desktop', '.sh', '.appimage'], emulator: '', direct: true },
   { id: 'a2600', name: 'Atari 2600', color: '#a0522d', extensions: ['.a26', '.zip'], emulator: '', libretro: 'Atari - 2600' },
   { id: 'arcade', name: 'Arcade', color: '#d4a017', extensions: ['.zip'], emulator: '', libretro: 'MAME' },
 ];
@@ -432,7 +446,7 @@ async function copySize(file) {
 
 const romDirsOf = sys => [...new Set(String(sys.romDir || '').split('|')
   .map(folder => folder.trim().replace(/^"(.*)"$/, '$1').trim()).filter(Boolean))];
-let libraryGames = [];
+let libraryGames = [], savesMoved = false;
 async function scanLibrary(folderReport) {
   if (!knownSizes) await readLibraryCache();
   const listings = scanListings = new Map(), sizes = scanSizes = new Map();
@@ -616,6 +630,8 @@ function presentLibrary(games) {
   const compareTitles = new Intl.Collator(undefined, { sensitivity: 'base' }).compare;
   games.sort((a, b) => compareTitles(a.title, b.title));
   libraryGames = games;
+  // Once the games are known (saves next to them get copied too), emulators' saves move to the Saves folder.
+  if (!savesMoved) { savesMoved = true; setTimeout(moveAllSaves, 2000); }
   // The window gets the disc numbers and the game's own state, never the other disc paths.
   return games.map(({ discPaths, ...g }) => ({ ...g, ...gameState(g.id) }));
 }
@@ -725,9 +741,10 @@ function checkPattern(pattern, what) {
   try { new RegExp(text, 'i'); } catch { throw new Error(`The ${what} pattern is not a valid regular expression.`); }
   return text;
 }
-// Picks the download for this computer when the repository gives no pattern.
-function guessAsset(assets) {
-  const win = process.platform === 'win32';
+// Picks the download for this computer when the repository gives no pattern (or for another system: a Windows build
+// to run through Proton on Linux).
+function guessAsset(assets, platform = process.platform) {
+  const win = platform === 'win32';
   const score = a => {
     const n = a.name.toLowerCase();
     if (/source|src\b|symbols|pdb|debug|[-_.]dbg[-_.]|libretro|\.sha\d*|\.sig$|\.asc$|\.txt$|\.json$/.test(n)) return -1;
@@ -744,7 +761,7 @@ function guessAsset(assets) {
       if (/no-?avx|no-?sse|compat|fallback|safe-?mode/.test(n)) v -= 3; // builds for old CPUs, when a normal one exists
       if (/msvc|clang|mingw|llvm/.test(n)) v -= .5; // when a plain build sits next to compiler variants, take the plain one
       if (/pgo/.test(n)) v += 1; // profile-optimised builds are the same program, just faster
-    } else if (process.platform === 'darwin') {
+    } else if (platform === 'darwin') {
       // Mac: archives that hold an .app (disk images can't be unpacked here).
       if (/(windows|win64|win32|\.exe$|linux|appimage|android|\.deb$|\.rpm$|\.dmg$)/.test(n)) return -1;
       if (!/\.(zip|tar\.(gz|xz|zst|bz2)|tgz)$/.test(n)) return -1;
@@ -757,6 +774,8 @@ function guessAsset(assets) {
       else if (/linux/.test(n) && /\.(tar\.(gz|xz|zst)|zip|7z)$/.test(n)) v += 3;
       else return -1;
       if (/x86_64|amd64|x64/.test(n)) v += 2;
+      if (/rog-?ally|steam-?deck|legacy/.test(n)) return -1;
+      if (/pgo/.test(n)) v += 1;
     }
     return v;
   };
@@ -791,7 +810,7 @@ function guessProgram(dir, repo) {
   const candidates = files.filter(f => {
     const n = path.basename(f).toLowerCase();
     if (/unins|uninstall|update|crash|redist|vc_?redist|setup|installer|helper|elevate|dxwebsetup/.test(n)) return false;
-    return win ? n.endsWith('.exe') : (n.endsWith('.appimage') || !path.extname(n));
+    return win ? n.endsWith('.exe') : (n.endsWith('.appimage') || (!path.extname(n) && isLinuxProgram(f)));
   });
   const rank = f => {
     const n = path.basename(f).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -826,7 +845,17 @@ async function ghJson(url) {
   return r.json();
 }
 
-async function findRelease(repo, { asset: pattern, prerelease }) {
+// orWindows: a PC port with no Linux build gets its Windows one, which runs through Proton (compat.js).
+// A project that publishes its own self-updating launcher next to its setup (DKB-Launcher.exe: it downloads the build
+// tools, builds the game from your copy and updates it in place) is installed and updated through that launcher.
+function portLauncherAsset(assets) {
+  if (process.platform !== 'win32') return null;
+  // only beside a setup kit (DKB-Setup-*.zip): a project whose launcher IS its game (rac1-launcher.exe) installs as usual
+  if (!(assets || []).some(x => /-setup[-.]/i.test(x.name))) return null;
+  const a = (assets || []).find(x => /-launcher\.exe$/i.test(x.name));
+  return a ? { name: a.name, url: a.browser_download_url, size: a.size, digest: a.digest || null } : null;
+}
+async function findRelease(repo, { asset: pattern, prerelease, orWindows }) {
   const re = pattern ? new RegExp(pattern, 'i') : null;
   let list;
   if (prerelease) list = await ghJson(`https://api.github.com/repos/${repo}/releases?per_page=15`);
@@ -838,12 +867,14 @@ async function findRelease(repo, { asset: pattern, prerelease }) {
   }
   for (const rel of list) {
     if (rel.draft) continue;
-    const asset = re ? rel.assets.find(a => re.test(a.name)) : guessAsset(rel.assets);
+    const asset = re ? rel.assets.find(a => re.test(a.name))
+      : guessAsset(rel.assets) || (orWindows && process.platform === 'linux' ? guessAsset(rel.assets, 'win32') : null);
     if (asset) return {
       tag: rel.tag_name, releaseName: rel.name || rel.tag_name, publishedAt: asset.updated_at || rel.published_at,
       assetId: asset.id, assetName: asset.name, size: asset.size, url: asset.browser_download_url, notes: rel.body || '',
       digest: asset.digest || null, page: rel.html_url || `https://github.com/${repo}/releases`, api: asset.url || null,
       uploader: asset.uploader?.login || rel.author?.login || null,
+      launcher: portLauncherAsset(rel.assets),
     };
   }
   const platformName = process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'macOS' : 'Linux';
@@ -855,7 +886,7 @@ const PROGRAM_FILTERS = process.platform === 'win32' ? [{ name: 'Programs', exte
   : process.platform === 'darwin' ? [{ name: 'Applications', extensions: ['app'] }, { name: 'All files', extensions: ['*'] }]
   : [{ name: 'All files', extensions: ['*'] }];
 const PROGRAM_START = process.platform === 'darwin' ? { defaultPath: '/Applications' } : {};
-const ARCHIVE = /\.(zip|7z|rar|tar|tgz|tar\.(gz|xz|zst|bz2))$/i;  // bsdtar (built into Windows) reads all of these
+const ARCHIVE = /\.(zip|7z|rar|tar|tgz|tar_?\.(gz|xz|zst|bz2))$/i;  // bsdtar (built into Windows) reads all of these
 function run(cmd, args) {
   return new Promise((res, rej) => {
     const p = spawn(cmd, args, { windowsHide: true });
@@ -879,11 +910,41 @@ async function extract(archive, dest) {
   throw new Error(`Can't unpack ${path.basename(archive)}: install bsdtar (libarchive) or ${/\.zip$/i.test(archive) ? 'unzip' : '7-Zip'}.`);
 }
 
-// Stream a fetch() response to a file, calling onChunk for progress.
-async function downloadTo(response, file, onChunk = () => {}) {
-  await pipeline(Readable.fromWeb(response.body), async function* (source) {
-    for await (const chunk of source) { onChunk(chunk); yield chunk; }
-  }, fs.createWriteStream(file));
+// Downloads pause one by one (Updates: Pause on its row), like Steam's: a paused one stops reading where it is and keeps
+// its partial file until it's resumed. Keyed like the progress messages ('emu:<id>', a game's id).
+const pausedDownloads = new Set(), resumeWaiters = new Map();
+const waitForResume = key => new Promise(resume => { if (!resumeWaiters.has(key)) resumeWaiters.set(key, []); resumeWaiters.get(key).push(resume); });
+function pauseDownload(key, on) {
+  if (!key) return false;
+  if (on) pausedDownloads.add(key);
+  else { pausedDownloads.delete(key); (resumeWaiters.get(key) || []).splice(0).forEach(resume => resume()); resumeWaiters.delete(key); }
+  log(`download ${key} ${on ? 'paused' : 'resumed'}`);
+  return !!on;
+}
+// Stream a fetch() response to a file, calling onChunk for progress. While paused it waits between pieces (onPause
+// says so). If the connection drops (a server gives up on a long pause), again(fromByte) asks for the rest and the
+// file carries on from where it got to, up to three times.
+async function downloadTo(response, file, onChunk = () => {}, { again = null, onPause = () => {}, key = null } = {}) {
+  let res = response, flags = 'w';
+  for (let tries = 0; ; tries++) {
+    try {
+      await pipeline(Readable.fromWeb(res.body), async function* (source) {
+        for await (const chunk of source) {
+          if (key && pausedDownloads.has(key)) { onPause(); await waitForResume(key); }
+          onChunk(chunk); yield chunk;
+        }
+      }, fs.createWriteStream(file, { flags }));
+      return;
+    } catch (e) {
+      if (!again || tries >= 3) throw e;
+      const from = fs.existsSync(file) ? fs.statSync(file).size : 0;
+      while (key && pausedDownloads.has(key)) await waitForResume(key);
+      res = await again(from);
+      if (res.status !== 206) throw e;
+      flags = 'a';
+      log(`download dropped at ${from} bytes, carrying on from there`);
+    }
+  }
 }
 
 // ---------- Recomp updates ----------
@@ -921,13 +982,48 @@ function noticeUpdate(holder, file, latest, outdated, current, name) {
     log(`noticed ${name} was updated to ${latest.tag}`);
   } else if (!inst.stamp) { inst.stamp = stamp.id; saveConfig(config); }
 }
+// The version a self-updating game has, from the files its own launcher or installer keeps: VERSION, version.txt,
+// current.txt (NX2navi's app\current.txt), or an *install*.json with "release" / "version" (DKB's dkb-install.json),
+// beside its program or one folder up. Its program file often doesn't change when it updates itself (NX2navi starts
+// through pythonw.exe), so this is what shows an in-app update happened.
+function versionOnDisk(exe) {
+  if (!exe) return null;
+  const semver = t => String(t || '').match(/\d+\.\d+(?:\.\d+)?/)?.[0] || null;
+  const here = path.dirname(exe), up = path.dirname(here);
+  for (const dir of [here, path.join(here, 'app'), up, path.join(up, 'app')]) {
+    let names; try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const n of names) {
+      const low = n.toLowerCase(), f = path.join(dir, n);
+      try {
+        if (['version', 'version.txt', 'current.txt'].includes(low)) { const v = semver(fs.readFileSync(f, 'utf8').split(/\r?\n/)[0]); if (v) return v; }
+        if (/install.*\.json$/.test(low) && fs.statSync(f).size < 1e6) { const j = JSON.parse(fs.readFileSync(f, 'utf8')); const v = semver(j.release || j.version); if (v) return v; }
+      } catch {}
+    }
+  }
+  return null;
+}
+const sameVersion = (a, b) => !!a && !!b && semver3(a) === semver3(b);
+const semver3 = t => (String(t || '').match(/\d+\.\d+(?:\.\d+)?/)?.[0] || '').split('.').concat(['0', '0']).slice(0, 3).join('.');
 function recompStatus(entry, latest) {
-  noticeUpdate(entry, entry.executable, latest, i => i.assetId ? i.assetId !== latest.assetId : i.tag !== latest.tag,
+  // Updated itself (in its own app or launcher): its version file says so, whether or not its program changed.
+  // (a game built by its own launcher: its version file is in the launcher's install folder)
+  let gameDir = entry.executable && path.dirname(entry.executable);
+  if (entry.updater) { try { gameDir = JSON.parse(fs.readFileSync(path.join(launcherBase(entry.updater), 'launcher.json'), 'utf8')).dest || gameDir; } catch {} }
+  const disk = entry.installed && latest && gameDir && versionOnDisk(path.join(gameDir, '_'));
+  if (disk && !sameVersion(disk, entry.installed.tag)) {
+    entry.installed = sameVersion(disk, latest.tag) ? { ...entry.installed, tag: latest.tag, assetId: latest.assetId, date: latest.publishedAt }
+      : { ...entry.installed, tag: `v${disk}`, assetId: undefined };
+    saveConfig(config); log(`noticed ${entry.title} is now ${entry.installed.tag} (its version file)`);
+  }
+  // Without a version file, a changed program file (or one newer than the release) means it updated itself. With
+  // one, that file alone says: a program swapped for another (like its launcher) is not an update.
+  if (!disk) noticeUpdate(entry, entry.executable, latest, i => i.assetId ? i.assetId !== latest.assetId : i.tag !== latest.tag,
     () => ({ tag: latest.tag, assetId: latest.assetId, date: latest.publishedAt }), entry.title);
   const inst = entry.installed || null;
   const updateAvailable = !latest ? null : inst?.assetId ? inst.assetId !== latest.assetId : inst?.tag ? inst.tag !== latest.tag : null;
   return {
     installed: inst, updateAvailable, auto: harbourInstalls(entry.source), repo: entry.source?.repo || null,
+    launcher: !!(entry.updater || latest?.launcher),  // updated with the project's own launcher (Update runs it)
     latest: latest && { tag: latest.tag, name: latest.releaseName, date: latest.publishedAt, notes: latest.notes, page: latest.page, assetName: latest.assetName, size: latest.size },
   };
 }
@@ -937,11 +1033,11 @@ async function checkRecomp(gameId, force = false) {
   const hit = recompChecks.get(gameId);
   if (!force && hit && Date.now() - hit.at < RECOMP_CHECK_MS && hit.repo === entry.source.repo) return recompStatus(entry, hit.latest);
   try {
-    const latest = await findRelease(entry.source.repo, { asset: entry.source.asset, prerelease: entry.source.prerelease });
+    const latest = await findRelease(entry.source.repo, { asset: entry.source.asset, prerelease: entry.source.prerelease, orWindows: true });
     // A new release Harbour would install: look inside its zip now (a few small reads, once per release) so a project
     // whose downloads aren't the program you start shows "update in app" straight away, not when you press Update.
     const lookedIn = hit?.lookedIn === latest.assetId ? hit.lookedIn : null;
-    if (!lookedIn && harbourInstalls(entry.source) && entry.executable && /\.zip$/i.test(latest.assetName) && recompStatus(entry, latest).updateAvailable) {
+    if (!lookedIn && harbourInstalls(entry.source) && entry.executable && !isAppImage(entry.executable) && /\.zip$/i.test(latest.assetName) && recompStatus(entry, latest).updateAvailable) {
       const names = await remoteZipNames(latest.url);
       const exe = path.basename(entry.executable).toLowerCase();
       if (names && !names.some(n => n.split('/').pop().toLowerCase() === exe)) updatesWithOwnTool(entry.source, entry.title);
@@ -989,20 +1085,24 @@ async function copyUpdate(src, dest, backup, kept) {
 }
 // Download a release file, check it (checksum when the site gives one, Windows Defender), and give
 // back the folder of new files ready to copy. The caller removes tmp afterwards.
-async function fetchRelease(rel, tmp, send) {
+async function fetchRelease(rel, tmp, send, key = null) {
   const archive = path.join(tmp, rel.assetName);
-  let r = await fetch(rel.url, { headers: { 'User-Agent': UA['User-Agent'] } });
+  let src = { url: rel.url, headers: { 'User-Agent': UA['User-Agent'] } };
+  let r = await fetch(src.url, { headers: src.headers });
   // A private GitHub repository's downloads need the GitHub login (gh) on this PC, through GitHub's own address.
   // The login is sent only to api.github.com: the redirect to the file itself drops it.
-  if (r.status === 404 && /^https:[/][/]api[.]github[.]com[/]/.test(rel.api || '') && githubToken())
-    r = await fetch(rel.api, { headers: { 'User-Agent': UA['User-Agent'], Accept: 'application/octet-stream', Authorization: `Bearer ${githubToken()}` } });
+  if (r.status === 404 && /^https:[/][/]api[.]github[.]com[/]/.test(rel.api || '') && githubToken()) {
+    src = { url: rel.api, headers: { 'User-Agent': UA['User-Agent'], Accept: 'application/octet-stream', Authorization: `Bearer ${githubToken()}` } };
+    r = await fetch(src.url, { headers: src.headers });
+  }
   if (!r.ok) throw new Error(`The download failed (error ${r.status}). Try again later.`);
   const total = Number(r.headers.get('content-length')) || rel.size || 0;
   let got = 0, last = 0;
   await downloadTo(r, archive, chunk => {
     got += chunk.length;
     if (Date.now() - last > 120) { last = Date.now(); send({ stage: `Downloading ${rel.assetName}`, pct: total ? got / total : 0 }); }
-  });
+  }, { key, onPause: () => send({ stage: 'Paused', pct: total ? got / total : 0 }),
+       again: from => { got = from; return fetch(src.url, { headers: { ...src.headers, Range: `bytes=${from}-` } }); } });
   send({ stage: 'Checking the download…', pct: 1 });
   if (rel.digest && /^sha256:/i.test(rel.digest)) {
     const want = rel.digest.slice(7).toLowerCase(), have = await sha256File(archive);
@@ -1016,16 +1116,32 @@ async function unpackRelease(rel, archive, tmp, send) {
   await fsp.mkdir(stage);
   if (ARCHIVE.test(rel.assetName)) { send({ stage: 'Extracting…', pct: 1 }); await extract(archive, stage); }
   else await fsp.rename(archive, path.join(stage, rel.assetName));
+  makeRunnable(stage);
   const top = fs.readdirSync(stage, { withFileTypes: true });
   return top.length === 1 && top[0].isDirectory() ? path.join(stage, top[0].name) : stage;
+}
+// A downloaded AppImage (or one unpacked from a zip) can't start until it's marked as a program.
+function makeRunnable(dir) {
+  if (process.platform === 'win32') return;
+  const walk = (d, depth) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { if (depth < 4) walk(p, depth + 1); }
+      else if (/\.appimage$/i.test(e.name)) try { fs.chmodSync(p, fs.statSync(p).mode | 0o755); } catch {}
+    }
+  };
+  try { walk(dir, 0); } catch {}
 }
 // ---- Same uploader ----
 // An update is only installed when the same account uploaded it as the version you have: a project taken over by
 // someone else, or a stranger's file, is stopped. (The first version Harbour installs sets who that is.) This and the
 // checksum work on any system; the Windows Defender scan is an extra where it's there.
+// A release uploaded by a different account than before isn't installed: a taken-over account can't slip one in. A
+// project moving between automated accounts (GitHub Actions, a build app: names ending in [bot]) is normal and goes ahead.
 function checkUploader(installed, rel, name) {
-  if (installed?.uploader && rel.uploader && installed.uploader.toLowerCase() !== rel.uploader.toLowerCase())
-    throw new Error(`${name} ${rel.tag} was uploaded by a different account (${rel.uploader}, before: ${installed.uploader}). Harbour didn't install it: check its release page.`);
+  const bot = u => /\[bot\]$/i.test(u || '');
+  if (installed?.uploader && rel.uploader && installed.uploader.toLowerCase() !== rel.uploader.toLowerCase() && !(bot(installed.uploader) && bot(rel.uploader)))
+    throw new Error(`${name} ${rel.tag} was uploaded by a different account (${rel.uploader}, before: ${installed.uploader}). OneDeck didn't install it: check its release page.`);
 }
 // ---- Can Harbour install this update, and where do its files go? ----
 // Harbour installs every update itself unless you switched that off, or it found that a project's downloads are
@@ -1073,6 +1189,24 @@ async function remoteZipNames(url) {
     return names;
   } catch { return null; }
 }
+// An AppImage is the whole program in one file whose name carries its version, so a release with one AppImage in it
+// replaces the one you have, under the same name (so everything pointing at it keeps working). Returns whether it did.
+const isAppImage = p => /\.appimage$/i.test(String(p || ''));
+async function swapAppImage(src, exe) {
+  if (process.platform === 'win32' || !isAppImage(exe)) return false;
+  const found = [];
+  const walk = (dir, depth) => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) { if (depth < 2) walk(p, depth + 1); } else if (isAppImage(e.name)) found.push(p);
+  } };
+  walk(src, 0);
+  if (found.length !== 1) return false;
+  const next = exe + '.new';
+  await fsp.copyFile(found[0], next);
+  await fsp.chmod(next, 0o755);
+  await fsp.rename(next, exe);
+  return true;
+}
 // Where an unpacked release goes: find the program you start (exe) inside it, and line the two up. A release whose
 // folders sit one level deeper or shallower than your install lines up by itself. null when the program isn't in
 // the release at all.
@@ -1113,9 +1247,22 @@ async function installInto(folder, src, oldTag, send) {
   } catch {}
   return { kept, backup: fs.existsSync(backup) ? backup : null };
 }
-// Is a program (by its file name) running right now? Windows only; elsewhere assume not.
+// Is a program (by its file name) running right now? On Linux: any process started as that file (a Windows game in
+// Proton or Wine shows its .exe there too). On a Mac, assume not.
 function isRunning(exe) {
-  if (process.platform !== 'win32' || !exe) return false;
+  if (!exe) return false;
+  if (process.platform === 'linux') {
+    const want = path.basename(exe).toLowerCase();
+    try {
+      for (const pid of fs.readdirSync('/proc')) {
+        if (!/^\d+$/.test(pid) || Number(pid) === process.pid) continue;
+        let cmd; try { cmd = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8'); } catch { continue; }
+        if (cmd.split('\0').slice(0, 3).some(a => a.split(/[\\/]/).pop().toLowerCase() === want)) return true;
+      }
+    } catch {}
+    return false;
+  }
+  if (process.platform !== 'win32') return false;
   const r = spawnSync('tasklist', ['/FI', `IMAGENAME eq ${path.basename(exe)}`, '/NH'], { windowsHide: true, encoding: 'utf8' });
   return (r.stdout || '').toLowerCase().includes(path.basename(exe).toLowerCase());
 }
@@ -1133,21 +1280,22 @@ async function updateRecomp(gameId, sendRaw) {
     send({ stage: 'Checking latest release…', pct: 0 });
     const hit = recompChecks.get(gameId);
     const rel = hit && hit.repo === entry.source.repo && Date.now() - hit.at < 10 * 60 * 1000 && hit.latest?.url ? hit.latest
-      : await findRelease(entry.source.repo, { asset: entry.source.asset, prerelease: entry.source.prerelease });
+      : await findRelease(entry.source.repo, { asset: entry.source.asset, prerelease: entry.source.prerelease, orWindows: true });
     checkUploader(entry.installed, rel, game.title);
     // A zip's file list says, before the big download, whether it holds the game's program at all.
     const exeName = entry.executable && path.basename(entry.executable).toLowerCase();
-    if (exeName && /\.zip$/i.test(rel.assetName)) {
+    if (exeName && !isAppImage(exeName) && /\.zip$/i.test(rel.assetName)) {
       send({ stage: 'Looking inside the release…', pct: 0 });
       const names = await remoteZipNames(rel.url);
       if (names && !names.some(n => n.split('/').pop().toLowerCase() === exeName)) throw updatesWithOwnTool(entry.source, game.title);
     }
-    const { archive, scan } = await fetchRelease(rel, tmp, send);
+    const { archive, scan } = await fetchRelease(rel, tmp, send, gameId);
     const src = await unpackRelease(rel, archive, tmp, send);
     // The release's files go wherever its copy of the program lines up with the one you start.
-    const root = entry.executable ? placeRelease(src, entry.executable) : entry.path;
+    const swapped = await swapAppImage(src, entry.executable);
+    const root = swapped ? path.dirname(entry.executable) : entry.executable ? placeRelease(src, entry.executable) : entry.path;
     if (!root) throw updatesWithOwnTool(entry.source, game.title);
-    const { kept, backup } = await installInto(root, src, entry.installed?.tag, send);
+    const { kept, backup } = swapped ? { kept: [], backup: null } : await installInto(root, src, entry.installed?.tag, send);
     if (inPortsDir(entry) && path.resolve(root) === path.resolve(entry.path)) await rememberRelease(entry.id, src);
     if (entry.executable && !fs.existsSync(entry.executable)) {
       const exe = findGameExe(root, { repo: entry.source.repo, title: entry.title }) || guessProgram(root, entry.source.repo);
@@ -1170,20 +1318,21 @@ async function updateRecomp(gameId, sendRaw) {
 // driver (used by many emulators) would read the raw device and get nothing, so programs Harbour starts are told to
 // leave it to Steam then. Without Steam running, the emulator may read the controller directly.
 function launchEnv() {
-  return isRunning('steam.exe') ? { ...process.env, SDL_JOYSTICK_HIDAPI_STEAM: '0' } : process.env;
+  return isRunning(process.platform === 'win32' ? 'steam.exe' : 'steam') ? { ...process.env, SDL_JOYSTICK_HIDAPI_STEAM: '0' } : process.env;
 }
 // Emulators that start with no controller buttons set get a standard gamepad layout, so a pad works straight away.
 // Only when nothing is bound yet: anything the player set themselves is left alone. melonDS: SDL button numbers of
 // an Xbox-style pad, d-pad as hat 0 (0x100 + up 1 / right 2 / down 4 / left 8), DS A/B on the pad's east/south.
-const PAD_DEFAULTS = {
-  'melonds.exe': { file: 'melonDS.toml', section: '[Instance0.Joystick]',
+const PAD_DEFAULTS = [
+  { name: /^melonds(?![a-z0-9])/i, files: dir => [path.join(dir, 'melonDS.toml'), path.join(xdgConfig(), 'melonDS', 'melonDS.toml')], section: '[Instance0.Joystick]',
     keys: { A: 1, B: 0, X: 3, Y: 2, L: 4, R: 5, Select: 6, Start: 7, Up: 0x101, Right: 0x102, Down: 0x104, Left: 0x108 } },
-};
+];
 function padDefaults(exe) {
-  const d = PAD_DEFAULTS[path.basename(exe).toLowerCase()];
+  const d = PAD_DEFAULTS.find(x => x.name.test(programName(exe)));
   if (!d) return;
   try {
-    const file = path.join(path.dirname(exe), d.file);
+    const file = d.files(path.dirname(exe)).find(f => fs.existsSync(f));
+    if (!file) return;
     const text = fs.readFileSync(file, 'utf8');
     const a = text.indexOf(d.section);
     if (a < 0) return;
@@ -1233,13 +1382,15 @@ function recordPlay(gameId, ms = 0, started = !ms) {
   const g = libraryGames.find(x => x.id === gameId);
   return { gameId, ...gameState(gameId), title: g?.title };
 }
-function track(game, child) {
+// stop: anything more that quitting needs (a Windows game in Proton: its Wine service, see compat.js).
+function track(game, child, stop) {
   const start = Date.now();
-  running.set(game.id, { child, start });
+  running.set(game.id, { child, start, stop });
   sendWindow('game:started', recordPlay(game.id));
   child.once('exit', () => {
     if (running.get(game.id)?.child === child) running.delete(game.id);
     // The game window opened on top of Harbour, so there was nothing to minimize; just come back to the front.
+    try { const { entry } = recompEntry(game.id); if (entry?.updater) adoptLauncherBuild(entry); } catch {}  // built through its launcher: plays the game now
     sendWindow('game:ended', { ...recordPlay(game.id, Date.now() - start, false), running: running.size });
     if (win && !win.isDestroyed()) win.focus();
   });
@@ -1253,6 +1404,7 @@ function quitGame() {
     if (process.platform === 'win32') spawn('taskkill', ['/pid', String(pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' });
     else process.kill(-pid, 'SIGTERM'); // detached: the game leads its own process group
   } catch { try { last.child.kill(); } catch {} }
+  last.stop?.();
   return true;
 }
 
@@ -1263,10 +1415,13 @@ async function launchDirect(game) {
   // the game's program gone (a port rebuilds it), its setup still there: the setup makes it again
   const own = game.recomp ? config.extraGames.find(x => x.id === game.added) : null;
   if (file && !fs.existsSync(file) && own?.setup && fs.existsSync(own.setup)) file = own.setup;
-  if (!file) throw new Error('Choose its program first: ••• → Choose game .exe…');
+  if (!file) throw new Error(`Choose its program first: ••• → ${process.platform === 'linux' ? 'Choose game program…' : 'Choose game .exe…'}`);
   if (!fs.existsSync(file)) throw new Error(`${path.basename(file)} is missing. Was it moved or deleted?`);
   // Programs are started directly; batch files, shortcuts and anything else open the way the system would.
-  const program = process.platform === 'win32' ? /\.exe$/i.test(file) : (/\.app$/i.test(file) || (fs.statSync(file).mode & 0o111) !== 0);
+  // On Linux a Windows program (.exe) starts through Proton.
+  const windowsGame = process.platform === 'linux' && /\.exe$/i.test(file);
+  const program = process.platform === 'win32' ? /\.exe$/i.test(file) : (windowsGame || /\.app$/i.test(file) || (fs.statSync(file).mode & 0o111) !== 0);
+  if (process.platform === 'linux' && /\.desktop$/i.test(file)) return launchDesktopFile(game, file);
   if (!program) {
     const err = await shell.openPath(file);
     if (err) throw new Error(`Couldn't open ${path.basename(file)}: ${err}`);
@@ -1278,11 +1433,13 @@ async function launchDirect(game) {
   const entry = game.recomp ? config.extraGames.find(x => x.id === game.added) : null;
   const args = Array.isArray(entry?.args) ? entry.args.map(String) : [];
   const cwd = entry?.cwd && fs.existsSync(entry.cwd) ? entry.cwd : path.dirname(exe);
+  const run = windowsGame ? compat.windowsCommand(exe, args, launchEnv()) : { cmd: exe, args, env: launchEnv() };
+  if (run.via) log(`${game.title}: Windows game, started through ${run.via}`);
   return new Promise((resolve, reject) => {
     padDefaults(exe);
-    const child = spawn(exe, args, { cwd, env: launchEnv(), detached: true, stdio: 'ignore' });
+    const child = spawn(run.cmd, run.args, { cwd, env: run.env, detached: true, stdio: 'ignore' });
     child.once('error', e => reject(new Error(`Launch failed: ${e.message}`)));
-    child.once('spawn', () => { track(game, child); child.unref(); resolve(true); });
+    child.once('spawn', () => { track(game, child, run.stop); child.unref(); resolve(true); });
     // A port's setup that makes the game's program: once it closes, Play starts that program from then on.
     if (entry && SETUP_EXE.test(path.basename(exe))) child.once('exit', () => {
       const best = portPrograms(entry.path, { repo: entry.source?.repo, title: entry.title }).programs[0];
@@ -1291,6 +1448,15 @@ async function launchDirect(game) {
       log(`${entry.title}: setup made ${path.basename(best)}, which Play starts now`);
       win?.webContents.send('toast', `${entry.title} is set up: Play now starts ${path.basename(best)}.`);
     });
+  });
+}
+// A Linux shortcut (.desktop, like the ones Steam makes): started the way the desktop would, through gio.
+// Like Windows shortcuts it has no process to follow, so it only counts as played.
+function launchDesktopFile(game, file) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('gio', ['launch', file], { detached: true, stdio: 'ignore', env: launchEnv() });
+    child.once('error', () => reject(new Error(`Couldn't open ${path.basename(file)}: gio (part of GLib) isn't installed.`)));
+    child.once('spawn', () => { child.unref(); sendWindow('game:started', { ...recordPlay(game.id), untracked: true }); resolve(true); });
   });
 }
 // The disc to start a multi-disc game with. Systems whose emulators read .m3u playlists get one
@@ -1329,39 +1495,47 @@ function resolutionScale(sysId) {
 const appData = () => process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
 const localAppData = () => process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
 const documents = () => { try { return app.getPath('documents'); } catch { return path.join(os.homedir(), 'Documents'); } };
+const xdgConfig = () => process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+const xdgData = () => process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
+// A program's name without its ending: "pcsx2-qt.exe" and "pcsx2-v2.8.2-linux-appimage-x64-Qt.AppImage" both start
+// "pcsx2", so one rule fits an emulator on Windows and Linux.
+const programName = exe => path.basename(String(exe || '')).replace(/\.(exe|appimage)$/i, '').toLowerCase();
+const named = s => new RegExp(`^(${s})(?![a-z0-9])`, 'i');
 // What each emulator needs: its fullscreen switch, and how to set its resolution (a launch option, or a settings
 // file: the first of `files` that exists, with section -> key -> value).
 const EMU_SETUP = [
-  { exe: /^dolphin\.exe$/i, fullscreen: ['-C', 'Dolphin.Display.Fullscreen=True'], args: s => ['-C', `GFX.Settings.InternalResolution=${s}`] },
-  { exe: /^flycast\.exe$/i, fullscreen: ['-config', 'window:fullscreen=yes'], args: s => ['-config', `config:rend.Resolution=${480 * s}`] },
-  { exe: /^pcsx2.*\.exe$/i, fullscreen: ['-fullscreen'],
-    files: dir => [path.join(dir, 'inis', 'PCSX2.ini'), path.join(documents(), 'PCSX2', 'inis', 'PCSX2.ini')],
+  { exe: named('dolphin'), fullscreen: ['-C', 'Dolphin.Display.Fullscreen=True'], args: s => ['-C', `GFX.Settings.InternalResolution=${s}`] },
+  { exe: named('flycast'), fullscreen: ['-config', 'window:fullscreen=yes'], args: s => ['-config', `config:rend.Resolution=${480 * s}`] },
+  { exe: named('pcsx2'), fullscreen: ['-fullscreen'],
+    files: dir => [path.join(dir, 'inis', 'PCSX2.ini'), path.join(documents(), 'PCSX2', 'inis', 'PCSX2.ini'), path.join(xdgConfig(), 'PCSX2', 'inis', 'PCSX2.ini')],
     values: s => ({ 'EmuCore/GS': { upscale_multiplier: s } }) },
-  { exe: /^duckstation.*\.exe$/i, fullscreen: ['-fullscreen'],
-    files: dir => [path.join(dir, 'settings.ini'), path.join(localAppData(), 'DuckStation', 'settings.ini'), path.join(documents(), 'DuckStation', 'settings.ini')],
+  { exe: named('duckstation'), fullscreen: ['-fullscreen'],
+    files: dir => [path.join(dir, 'settings.ini'), path.join(localAppData(), 'DuckStation', 'settings.ini'), path.join(documents(), 'DuckStation', 'settings.ini'),
+      path.join(xdgData(), 'duckstation', 'settings.ini')],
     values: s => ({ GPU: { ResolutionScale: s } }) },
-  { exe: /^melonds\.exe$/i, fullscreen: ['-f'],
-    files: dir => [path.join(dir, 'melonDS.toml'), path.join(appData(), 'melonDS', 'melonDS.toml')],
+  { exe: named('melonds'), fullscreen: ['-f'],
+    files: dir => [path.join(dir, 'melonDS.toml'), path.join(appData(), 'melonDS', 'melonDS.toml'), path.join(xdgConfig(), 'melonDS', 'melonDS.toml')],
     values: s => ({ '3D': { Renderer: 1 }, '3D.GL': { ScaleFactor: s } }) },  // the OpenGL renderer can scale; software can't
-  { exe: /^xemu\.exe$/i, fullscreen: ['-full-screen'],
-    files: dir => [path.join(dir, 'xemu.toml'), path.join(appData(), 'xemu', 'xemu', 'xemu.toml')],
+  { exe: named('xemu'), fullscreen: ['-full-screen'],
+    files: dir => [path.join(dir, 'xemu.toml'), path.join(appData(), 'xemu', 'xemu', 'xemu.toml'), path.join(xdgData(), 'xemu', 'xemu', 'xemu.toml')],
     values: s => ({ 'display.quality': { surface_scale: s } }) },
-  { exe: /^(azahar|citra-qt|lime3ds)\.exe$/i, fullscreen: ['-f'],
-    files: dir => [path.join(dir, 'user', 'config', 'qt-config.ini'), path.join(appData(), 'Azahar', 'config', 'qt-config.ini')],
+  { exe: named('azahar(plus)?|citra(-qt)?|lime3ds'), fullscreen: ['-f'],
+    files: dir => [path.join(dir, 'user', 'config', 'qt-config.ini'), path.join(appData(), 'Azahar', 'config', 'qt-config.ini'),
+      path.join(xdgConfig(), 'azahar-emu', 'qt-config.ini'), path.join(xdgConfig(), 'Azahar', 'qt-config.ini')],
     values: s => ({ Renderer: { 'resolution_factor\\default': 'false', resolution_factor: s } }) },
-  { exe: /^rpcs3\.exe$/i, fullscreen: ['--fullscreen'], only: args => args.includes('--no-gui') },  // RPCS3's switch needs --no-gui
-  { exe: /^(eden|lichii|yuzu|citron|suyu|sudachi|torzu)\.exe$/i, fullscreen: ['-f'] },
-  { exe: /^rmg\.exe$/i, fullscreen: ['--fullscreen'] },
-  { exe: /^shadps4\.exe$/i, fullscreen: ['-f', 'true'] },
-  { exe: /^ppsspp.*\.exe$/i, fullscreen: ['--fullscreen'] },
-  { exe: /^xenia.*\.exe$/i, fullscreen: ['--fullscreen'] },
-  { exe: /^cemu\.exe$/i, fullscreen: ['-f'] },
-  { exe: /^ryujinx\.exe$/i, fullscreen: ['--fullscreen'] },
-  { exe: /^mgba\.exe$/i, fullscreen: ['-f'] },
-  { exe: /^snes9x.*\.exe$/i, fullscreen: ['-fullscreen'] },
-  { exe: /^mesen\.exe$/i, fullscreen: ['--fullscreen'] },
+  { exe: named('rpcs3'), fullscreen: ['--fullscreen'], only: args => args.includes('--no-gui') },  // RPCS3's switch needs --no-gui
+  { exe: named('eden|lichii|yuzu|citron|suyu|sudachi|torzu'), fullscreen: ['-f'] },
+  { exe: named('rmg'), fullscreen: ['--fullscreen'] },
+  { exe: named('shadps4'), fullscreen: ['-f', 'true'] },
+  { exe: named('ppsspp\\w*'), fullscreen: ['--fullscreen'] },
+  { exe: named('xenia\\w*'), fullscreen: ['--fullscreen'] },
+  { exe: named('cemu'), fullscreen: ['-f'] },
+  { exe: named('ryujinx'), fullscreen: ['--fullscreen'] },
+  { exe: named('mgba(-qt)?'), fullscreen: ['-f'] },
+  { exe: named('snes9x'), fullscreen: ['-fullscreen'] },
+  { exe: named('mesen'), fullscreen: ['--fullscreen'] },
 ];
-const setupFor = exe => EMU_SETUP.find(x => x.exe.test(path.basename(exe)));
+const setupFor = exe => EMU_SETUP.find(x => x.exe.test(programName(exe)));
 // Sets key = value lines inside [section] blocks of an ini/TOML-style file, adding what's missing. Keeps the rest.
 function setFileValues(file, sections) {
   const text = fs.readFileSync(file, 'utf8'), nl = text.includes('\r\n') ? '\r\n' : '\n';
@@ -1383,8 +1557,9 @@ function setFileValues(file, sections) {
 // The launch options for a game: the emulator's own, plus its fullscreen switch and resolution when they're missing.
 // Settings files are written here too (before the game starts, and again after it closes, for an emulator whose
 // settings file only appears on its first run).
-function emulatorSetup(exe, sysId, args) {
+function emulatorSetup(exe, sysId, args, rom) {
   padDefaults(exe);
+  moveSaves(exe, rom);
   const s = setupFor(exe);
   if (!s) return args;
   // Added at the front: some emulators stop reading options at the game file, and options like "-dvd_path <file>"
@@ -1428,13 +1603,13 @@ function launchGame(gameId, options = {}) {
   const tpl = emuDef(emuId).args || '{rom}';
   const rom = discFile(game, sys, disc);
   // split/join instead of replace(): "$&", "$$" etc. in a filename must stay literal.
-  const args = emulatorSetup(exe, sys.id, splitArgs(tpl).map(a => a.split('{rom}').join(rom)));
+  const args = emulatorSetup(exe, sys.id, splitArgs(tpl).map(a => a.split('{rom}').join(rom)), rom);
   return new Promise((resolve, reject) => {
     // detached: the game keeps running if Harbour is closed or restarted while playing.
     const child = spawn(exe, args, { cwd: path.dirname(exe), env: launchEnv(), detached: true, stdio: 'ignore' });
     child.once('error', e => reject(new Error(`Launch failed: ${e.message}`)));
     // An emulator's settings file can first appear when it closes: set its resolution then, for next time.
-    child.once('exit', () => { const s = setupFor(exe), scale = resolutionScale(sys.id); if (s?.files && scale) tuneFile(exe, s, scale); });
+    child.once('exit', () => { const s = setupFor(exe), scale = resolutionScale(sys.id); if (s?.files && scale) tuneFile(exe, s, scale); moveSaves(exe); });
     child.once('spawn', () => { track(game, child); child.unref(); resolve(true); });
   });
 }
@@ -1448,8 +1623,8 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1600, height: 900, minWidth: 1100, minHeight: 650,
     fullscreen: startFullscreen,
-    backgroundColor: '#07080c', autoHideMenuBar: true, title: 'Harbour',
-    icon:path.join(ROOT,'ui/assets/brand/harbour-icon-256.png'),
+    backgroundColor: '#07080c', autoHideMenuBar: true, title: 'OneDeck',
+    icon:path.join(ROOT,'ui/assets/brand/onedeck-icon-256.png'),
     webPreferences: { preload: path.join(ROOT, 'preload.js'), contextIsolation: true, sandbox: false, autoplayPolicy: 'no-user-gesture-required' },
   });
   // A --fullscreen / --windowed launch is the same choice as pressing F11, so record it either way.
@@ -1492,7 +1667,10 @@ handle('config:get', () => config);
 // older copy of the settings can never overwrite them.
 handle('config:set', cfg => {
   if (!cfg || !Array.isArray(cfg.systems)) throw new Error('Invalid settings');
-  const next = { ...cfg, emulators: config.emulators, customEmulators: config.customEmulators, extraGames: config.extraGames, fullscreen: config.fullscreen };
+  // What the main process owns (emulators, games, cloud saves, tuned emulator settings) is kept from its own copy.
+  const next = { ...cfg, emulators: config.emulators, customEmulators: config.customEmulators, extraGames: config.extraGames, fullscreen: config.fullscreen,
+    cloudSaves: config.cloudSaves, savesFor: config.savesFor, tuned: config.tuned,
+    saveFolders: config.saveFolders, savesConsoles: config.savesConsoles, savesSkip: config.savesSkip };
   saveConfig(next);
   config = next;
   return config;
@@ -1561,10 +1739,12 @@ handle('game:chooseExecutable', async gameId => {
   const game = libraryGames.find(g => g.id === gameId && g.recomp);
   const entry = game && config.extraGames.find(x => x.id === game.added);
   if (!entry) throw new Error('Select a Recomp game first.');
-  const result = await dialog.showOpenDialog(win, {title:'Choose the .exe for ' + game.title,defaultPath:entry.path,properties:['openFile'],filters:[{name:'Game executable',extensions:['exe']}]});
+  const linux = process.platform === 'linux';
+  const result = await dialog.showOpenDialog(win, {title:'Choose the program for ' + game.title,defaultPath:entry.path,properties:['openFile'],
+    filters: linux ? [{name:'All files',extensions:['*']}] : [{name:'Game executable',extensions:['exe']}]});
   if (result.canceled) return null;
   const file = result.filePaths[0];
-  if (!/\.exe$/i.test(file) || !fs.statSync(file).isFile()) throw new Error('Choose a game .exe file.');
+  if (!fs.statSync(file).isFile() || !(/\.exe$/i.test(file) || (linux && isLinuxProgram(file)))) throw new Error(linux ? 'Choose the game\'s program (a Linux program or a Windows .exe).' : 'Choose a game .exe file.');
   entry.executable = file; saveConfig(config);
   return {gameId, executable:file};
 });
@@ -1682,6 +1862,13 @@ handle('library:saveUi', patch => {
 // ranked: in the folder itself before deeper ones, named like the project or the game, then the biggest.
 const HELPER_EXE = /unins|crash_?(pad|handler|report|dump|sender|upload)|report|redist|clang|lld|ninja|cmake|python|xbe_recomp|dxsetup|dxwebsetup|updater|update|ffmpeg|ffprobe|7z|helper|elevate|cli\.exe$|dotnet|vc_|createdump/i;
 const SETUP_EXE = /setup|install/i;
+// A Linux program: an AppImage, or a file marked runnable with no ending (or a game ending like .x86_64). Not libraries.
+function isLinuxProgram(p) {
+  const n = path.basename(p).toLowerCase();
+  if (/\.so(\.|$)/.test(n)) return false;
+  if (!/\.(appimage|x86_64|x86|sh)$/.test(n) && path.extname(n)) return false;
+  try { return (fs.statSync(p).mode & 0o111) !== 0; } catch { return false; }
+}
 function portPrograms(folder, { repo, title } = {}) {
   const found = [];
   const walk = (dir, depth) => {
@@ -1690,10 +1877,10 @@ function portPrograms(folder, { repo, title } = {}) {
     for (const e of entries) {
       const p = path.join(dir, e.name);
       if (e.isDirectory() && depth < 2 && !/^(_harbour-backup|disc|data|saves?|mods|cache|shaders?|tools?|toolchain|deps|redist)$/i.test(e.name)) walk(p, depth + 1);
-      else if (e.isFile() && /\.exe$/i.test(e.name) && !HELPER_EXE.test(e.name)) {
+      else if (e.isFile() && !HELPER_EXE.test(e.name) && (/\.exe$/i.test(e.name) || (process.platform === 'linux' && isLinuxProgram(p)))) {
         let size = 0;
         try { size = fs.statSync(p).size; } catch {}
-        found.push({ p, depth, size, setup: SETUP_EXE.test(e.name) });
+        found.push({ p, depth, size, setup: SETUP_EXE.test(e.name), native: !/\.exe$/i.test(e.name) });
       }
     }
   };
@@ -1701,8 +1888,9 @@ function portPrograms(folder, { repo, title } = {}) {
   const words = s => String(s || '').toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2 && !/^(the|recomp|recompiled|port|win64|x64|windows|pc)$/.test(w));
   const hints = new Set([...words(String(repo || '').split('/').pop()), ...words(title)]);
   const score = f => {
-    const name = path.basename(f.p, '.exe').toLowerCase();
+    const name = programName(f.p);
     let v = -f.depth * 100 + Math.min(f.size / 1e6, 99) / 10;  // a megabyte is a tenth of a point, up to ten
+    if (f.native) v += 50;  // on Linux, a port's own Linux build before its Windows one
     for (const w of hints) if (name.includes(w)) v += 30;
     return v;
   };
@@ -1903,7 +2091,7 @@ handle('harbour:pickPort', async () => {
   const picked = await dialog.showOpenDialog(win, { title: 'Choose the game\'s folder', properties: ['openDirectory'] });
   if (picked.canceled) return null;
   const folder = picked.filePaths[0];
-  if (config.extraGames.some(x => x.system === 'recomp' && path.resolve(x.path) === path.resolve(folder))) throw new Error('That game is already in Harbour.');
+  if (config.extraGames.some(x => x.system === 'recomp' && path.resolve(x.path) === path.resolve(folder))) throw new Error('That game is already in OneDeck.');
   let executable = findGameExe(folder);
   if (!executable) {
     const r = await dialog.showOpenDialog(win, { title: 'Which program starts the game?', defaultPath: folder, properties: ['openFile'], filters: [{ name: 'Programs', extensions: ['exe'] }] });
@@ -1924,7 +2112,7 @@ handle('harbour:pickPortExe', async folder => {
 handle('harbour:addPort', async ({ folder, executable, setup, platform, title, repo, prerelease, installed }) => {
   if (!folder || !executable || !fs.existsSync(executable)) throw new Error('Choose the game\'s folder first.');
   if (platform && !config.systems.some(s => s.id === platform)) throw new Error('Unknown console.');
-  if (config.extraGames.some(x => x.system === 'recomp' && path.resolve(x.path) === path.resolve(folder))) throw new Error('That game is already in Harbour.');
+  if (config.extraGames.some(x => x.system === 'recomp' && path.resolve(x.path) === path.resolve(folder))) throw new Error('That game is already in OneDeck.');
   const source = String(repo || '').trim() ? { repo: parseRepo(repo), prerelease: !!prerelease } : undefined;
   const entry = { id: randomUUID().slice(0, 8), system: 'recomp', path: folder, title: String(title || '').trim().slice(0, 120) || titleFromFolder(path.basename(folder)),
     executable, platform: platform || undefined, source, installed: source && installed?.tag ? installed : undefined,
@@ -1938,13 +2126,16 @@ handle('harbour:addPort', async ({ folder, executable, setup, platform, title, r
 // the name and console and adds it. Projects without a ready-to-run Windows build are refused up front.
 // Where ports and emulators install: beside Harbour's data, or a folder you chose (Settings). Installs already made
 // stay where they are.
-const DEFAULT_DIRS = { ports: path.join(path.dirname(DATA), 'Ports'), emulators: path.join(path.dirname(DATA), 'Emulators') };
+// games: the folder for your ROMs, one folder per console inside (the welcome screen makes them).
+const DEFAULT_DIRS = { ports: path.join(path.dirname(DATA), 'Ports'), emulators: path.join(path.dirname(DATA), 'Emulators'),
+  games: path.join(path.dirname(DATA), 'Games'), saves: path.join(path.dirname(DATA), 'Saves') };
 const installDir = kind => config.installDirs?.[kind] || DEFAULT_DIRS[kind];
-handle('harbour:installDirs', () => ({ ports: installDir('ports'), emulators: installDir('emulators') }));
-// save: false only picks (the welcome screen saves its choices on Next).
+handle('harbour:installDirs', () => ({ ports: installDir('ports'), emulators: installDir('emulators'), games: installDir('games'), saves: installDir('saves') }));
+// save: false only picks (the welcome screen saves its choices on Next). A folder that isn't there yet is made.
 const setInstallDir = (kind, dir) => {
   if (!DEFAULT_DIRS[kind]) throw new Error('Unknown folder.');
-  if (!canWrite(dir)) throw new Error("Harbour can't write in that folder. Pick another (Program Files needs admin rights).");
+  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  if (!canWrite(dir)) throw new Error("OneDeck can't write in that folder. Pick another (Program Files needs admin rights).");
   config.installDirs = { ...(config.installDirs || {}), [kind]: path.resolve(dir) === path.resolve(DEFAULT_DIRS[kind]) ? undefined : dir };
   saveConfig(config);
   return installDir(kind);
@@ -1952,11 +2143,11 @@ const setInstallDir = (kind, dir) => {
 handle('harbour:setInstallDir', ({ kind, dir }) => setInstallDir(kind, dir));
 handle('harbour:pickInstallDir', async (kind, { save = true } = {}) => {
   if (!DEFAULT_DIRS[kind]) throw new Error('Unknown folder.');
-  const r = await dialog.showOpenDialog(win, { title: kind === 'ports' ? 'Where should PC ports install?' : 'Where should emulators install?',
+  const r = await dialog.showOpenDialog(win, { title: kind === 'ports' ? 'Where should PC ports install?' : kind === 'games' ? 'Where should your games (ROMs) go?' : 'Where should emulators install?',
     defaultPath: installDir(kind), properties: ['openDirectory', 'createDirectory'] });
   if (r.canceled) return null;
   const dir = r.filePaths[0];
-  if (!save) { if (!canWrite(dir)) throw new Error("Harbour can't write in that folder. Pick another (Program Files needs admin rights)."); return dir; }
+  if (!save) { if (!canWrite(dir)) throw new Error("OneDeck can't write in that folder. Pick another (Program Files needs admin rights)."); return dir; }
   return setInstallDir(kind, dir);
 });
 const GAME_FILE_EXTS = [...new Set(DEFAULT_SYSTEMS.filter(s => !s.direct).flatMap(s => s.extensions).map(e => e.slice(1)))];
@@ -1969,24 +2160,34 @@ handle('harbour:pickGameFile', async () => {
 // Only what Harbour shows is kept: the game, the project, its GitHub page, its console and what it needs from you.
 const CATALOG_FILE = path.join(DATA, 'media', '_index', 'recompendium.json');
 const CATALOG_CONSOLES = { gamecube: 'gc', megadrive: 'genesis' };
-// Harbour's own ports, listed with Recompendium's and marked as Harbour's: every public repository of HARBOUR_OWNER
-// with the harbour-recomp topic and a harbour.json saying what it is ({ name, project, console, consoleName,
+// OneDeck's own ports, listed with Recompendium's and marked as OneDeck's: every public repository of HARBOUR_OWNERS
+// with the onedeck-recomp topic and a onedeck.json saying what it is ({ name, project, console, consoleName,
 // tier: alpha | beta | complete, needs, year, romDir: the folder beside the program the game file goes in }).
-// Read once a day, so a new one shows up by itself.
-const HARBOUR_OWNER = 'goodthanksdev';
+// Read once a day, so a new one shows up by itself. The old names (anydock-recomp, anydock.json, the goodthanksdev
+// account) are still read for a while, for ports not moved over yet.
+const HARBOUR_OWNERS = ['onedeck-launcher', 'goodthanksdev'];
+const HARBOUR_TOPICS = ['onedeck-recomp', 'anydock-recomp'];
+const HARBOUR_INFO = ['onedeck.json', 'anydock.json'];
 const HARBOUR_TIERS = ['alpha', 'beta', 'complete'];
-const HARBOUR_FILE = path.join(DATA, 'media', '_index', 'harbour-ports.json');
+const HARBOUR_FILE = path.join(DATA, 'media', '_index', 'anydock-ports.json');
 let harbourList = null;
 async function harbourPorts() {
   if (!harbourList) try { harbourList = JSON.parse(await fsp.readFile(HARBOUR_FILE, 'utf8')); } catch {}
   if (harbourList && Date.now() - harbourList.at < 864e5) return harbourList.list;
   try {
-    const q = encodeURIComponent(`topic:harbour-recomp user:${HARBOUR_OWNER}`);
-    const found = await ghJson(`https://api.github.com/search/repositories?q=${q}&per_page=100`);
-    const list = (await Promise.all((found.items || []).filter(r => !r.archived && !r.private).map(async r => {
+    const users = HARBOUR_OWNERS.map(u => `user:${u}`).join(' '), repos = new Map();
+    for (const topic of HARBOUR_TOPICS) {
+      const found = await ghJson(`https://api.github.com/search/repositories?q=${encodeURIComponent(`topic:${topic} ${users}`)}&per_page=100`);
+      for (const r of found.items || []) if (!r.archived && !r.private) repos.set(r.full_name.toLowerCase(), r);
+    }
+    const list = (await Promise.all([...repos.values()].map(async r => {
       try {
-        const file = await ghJson(`https://api.github.com/repos/${r.full_name}/contents/harbour.json`);
-        const j = JSON.parse(Buffer.from(file.content || '', 'base64').toString('utf8'));
+        let j = null;
+        for (const name of HARBOUR_INFO) {
+          try { const file = await ghJson(`https://api.github.com/repos/${r.full_name}/contents/${name}`); j = JSON.parse(Buffer.from(file.content || '', 'base64').toString('utf8')); break; }
+          catch (e) { if (e.status !== 404) throw e; }
+        }
+        if (!j) return null;
         if (!j.name || !j.console) return null;
         let released = false;
         try { released = (await ghJson(`https://api.github.com/repos/${r.full_name}/releases?per_page=5`)).some(x => !x.draft); } catch {}
@@ -2025,7 +2226,7 @@ handle('harbour:portCatalog', async () => {
 const installingPorts = new Set();
 handle('harbour:installPort', async ({ repo: link, rom, title, platform }) => {
   const repo = parseRepo(link);
-  if (config.extraGames.some(x => x.source?.repo?.toLowerCase() === repo.toLowerCase())) throw new Error('That game is already in Harbour.');
+  if (config.extraGames.some(x => x.source?.repo?.toLowerCase() === repo.toLowerCase())) throw new Error('That game is already in OneDeck.');
   if (rom && !fs.existsSync(rom)) throw new Error("Can't find that game file.");
   if (installingPorts.has(repo)) throw new Error('Already installing.');
   installingPorts.add(repo);
@@ -2034,11 +2235,27 @@ handle('harbour:installPort', async ({ repo: link, rom, title, platform }) => {
   try {
     send({ stage: 'Finding the latest release…', pct: 0 });
     let rel;
-    try { rel = await findRelease(repo, { prerelease: false }); }
-    catch (e) { throw new Error(e.status === 404 ? "GitHub can't find that project." : `${repo} has no Windows download Harbour can install. Install it the way its page says, then add its folder.`); }
-    const notReady = () => new Error(`${repo} doesn't publish a ready-to-run Windows build. Install it the way its page says, then add its folder.`);
+    try { rel = await findRelease(repo, { prerelease: false, orWindows: true }); }
+    catch (e) { throw new Error(e.status === 404 ? "GitHub can't find that project." : `${repo} has no download OneDeck can install. Install it the way its page says, then add its folder.`); }
+    if (rel.launcher) {
+      // Its own launcher builds the game from your copy and keeps it updated: that's what goes in. Play opens it
+      // until the game is built; after that the game itself (adoptLauncherBuild).
+      send({ stage: 'Getting its launcher…', pct: 0 });
+      const exe = await placeLauncher(repo, rel.launcher, title || repo);
+      const entry = { id: randomUUID().slice(0, 8), system: 'recomp', path: path.dirname(exe), title: String(title || repo.split('/')[1]).slice(0, 120),
+        executable: exe, updater: exe, platform: config.systems.some(s => s.id === platform) ? platform : undefined,
+        source: { repo, prerelease: false, ownTool: true }, installed: { tag: rel.tag, date: rel.publishedAt, uploader: rel.uploader || undefined },
+        installRoot: installDir('ports') };
+      config.extraGames.push(entry); saveConfig(config);
+      log(`installed port ${repo} ${rel.tag} through its launcher ${rel.launcher.name} as ${entry.title}`);
+      send({ stage: 'Done', pct: 1, done: true });
+      return { ...entry, viaLauncher: true };
+    }
+    const notReady = () => new Error(`${repo} doesn't publish a ready-to-run build. Install it the way its page says, then add its folder.`);
     if (/setup|install/i.test(rel.assetName) && /\.(exe|msi)$/i.test(rel.assetName)) throw notReady();
-    if (/\.zip$/i.test(rel.assetName)) { const names = await remoteZipNames(rel.url); if (names && !names.some(n => /\.exe$/i.test(n))) throw notReady(); }
+    const linuxBuild = /linux|appimage/i.test(rel.assetName);
+    if (!linuxBuild && /\.zip$/i.test(rel.assetName)) { const names = await remoteZipNames(rel.url); if (names && !names.some(n => /\.exe$/i.test(n))) throw notReady(); }
+    if (!linuxBuild && process.platform === 'linux' && !compat.canRunWindows()) throw new Error(`${repo} only has a Windows build. Install Steam (it brings Proton) or Wine, then try again.`);
     const { archive, scan } = await fetchRelease(rel, tmp, send);
     const src = await unpackRelease(rel, archive, tmp, send);
     send({ stage: 'Installing…', pct: 1 });
@@ -2094,32 +2311,38 @@ handle('harbour:addEmulator', async ({ name, systems, args, makeDefault }) => {
 // Program names Harbour recognises: the ones it can install (their release source too, so they get updates), and
 // other common ones it can only run.
 const EMU_FIND = [
-  { re: /^rmg\.exe$/i, catalog: 'rmg' },
-  { re: /^duckstation-qt.*\.exe$/i, catalog: 'duckstation' },
-  { re: /^pcsx2-qt.*\.exe$/i, catalog: 'pcsx2' },
-  { re: /^rpcs3\.exe$/i, catalog: 'rpcs3' },
-  { re: /^shadps4\.exe$/i, catalog: 'shadps4' },
-  { re: /^ppssppwindows(64)?\.exe$/i, catalog: 'ppsspp' },
-  { re: /^xemu\.exe$/i, catalog: 'xemu' },
-  { re: /^xenia_canary\.exe$/i, catalog: 'xenia-canary' },
-  { re: /^melonds\.exe$/i, catalog: 'melonds' },
-  { re: /^azahar\.exe$/i, catalog: 'azahar' },
-  { re: /^mgba\.exe$/i, catalog: 'mgba' },
-  { re: /^cemu\.exe$/i, catalog: 'cemu' },
-  { re: /^dolphin\.exe$/i, catalog: 'dolphin' },
-  { re: /^eden\.exe$/i, catalog: 'eden' },
-  { re: /^lichii\.exe$/i, catalog: 'lichii' },
-  { re: /^flycast\.exe$/i, catalog: 'flycast' },
-  { re: /^snes9x(-x64)?\.exe$/i, catalog: 'snes9x' },
-  { re: /^mesen\.exe$/i, catalog: 'mesen' },
-  { re: /^ryujinx\.exe$/i, catalog: 'ryujinx' },
-  { re: /^(yuzu|citron|suyu|sudachi|torzu)\.exe$/i, consoles: ['switch'], args: '-g {rom}' },
-  { re: /^project64\.exe$/i, name: 'Project64', consoles: ['n64'], args: '{rom}' },
-  { re: /^xenia\.exe$/i, name: 'Xenia', consoles: ['x360'], args: '{rom}' },
-  { re: /^(citra-qt|lime3ds(-gui)?)\.exe$/i, consoles: ['3ds'], args: '{rom}' },
-  { re: /^redream\.exe$/i, name: 'redream', consoles: ['dreamcast'], args: '{rom}' },
-  { re: /^bsnes\.exe$/i, name: 'bsnes', consoles: ['snes'], args: '{rom}' },
+  { re: named('rmg'), catalog: 'rmg' },
+  { re: named('duckstation'), catalog: 'duckstation' },
+  { re: named('pcsx2'), catalog: 'pcsx2' },
+  { re: named('rpcs3'), catalog: 'rpcs3' },
+  { re: named('shadps4'), catalog: 'shadps4' },
+  { re: named('ppsspp(windows(64)?|sdl|qt)?'), catalog: 'ppsspp' },
+  { re: named('xemu'), catalog: 'xemu' },
+  { re: named('xenia_canary'), catalog: 'xenia-canary' },
+  { re: named('melonds'), catalog: 'melonds' },
+  { re: named('azaharplus'), catalog: 'azaharplus' },
+  { re: named('azahar'), catalog: 'azahar' },
+  { re: named('mgba(-qt)?'), catalog: 'mgba' },
+  { re: named('cemu'), catalog: 'cemu' },
+  { re: named('dolphin(-emu)?'), catalog: 'dolphin', name: 'Dolphin', consoles: ['gc', 'wii'], args: '-b -C Dolphin.Display.Fullscreen=True -e {rom}' },  // its own entry: no Linux download to install
+  { re: named('eden'), catalog: 'eden' },
+  { re: named('lichii'), catalog: 'lichii' },
+  { re: named('flycast'), catalog: 'flycast' },
+  { re: named('snes9x'), catalog: 'snes9x' },
+  { re: named('mesen'), catalog: 'mesen' },
+  { re: named('ryujinx'), catalog: 'ryujinx' },
+  { re: named('yuzu|citron|suyu|sudachi|torzu'), consoles: ['switch'], args: '-g {rom}' },
+  { re: named('project64'), name: 'Project64', consoles: ['n64'], args: '{rom}' },
+  { re: named('xenia'), name: 'Xenia', consoles: ['x360'], args: '{rom}' },
+  { re: named('citra(-qt)?|lime3ds(-gui)?'), consoles: ['3ds'], args: '{rom}' },
+  { re: named('redream'), name: 'redream', consoles: ['dreamcast'], args: '{rom}' },
+  { re: named('bsnes'), name: 'bsnes', consoles: ['snes'], args: '{rom}' },
 ];
+// Programs beside an emulator that aren't it (its command-line copy, updater, server, tools).
+const EMU_HELPER = /(^|[-_ ])(cli|cmd|room|tool|tools|updater|update|uninstall|unins\d*|headless|nogui|crash\w*|config|test)([-_ .]|$)|tool$/i;
+// An emulator's program on this system: an .exe on Windows; on Linux an AppImage or a runnable file with no ending.
+const emuProgram = (p, name) => process.platform === 'win32' ? /\.exe$/i.test(name)
+  : isAppImage(name) ? true : !path.extname(name) && isLinuxProgram(p);
 const SCAN_SKIP = /^(\$recycle\.bin|system volume information|windows|node_modules|\.git|cache|shadercache|shaders|logs?|screenshots|saves?|nand|sdmc|dev_hdd0|memcards)$/i;
 // Pick a folder; every emulator found in it (four folders deep) is added for its consoles, and becomes the one a
 // console uses when that console has none that works. Ones already added are left alone.
@@ -2136,9 +2359,10 @@ handle('harbour:scanEmulators', async folder => {
       if (++looked > 200000) return;
       const p = path.join(dir, e.name);
       if (e.isDirectory()) { if (depth < 4 && !SCAN_SKIP.test(e.name)) walk(p, depth + 1); continue; }
-      const k = EMU_FIND.find(f => f.re.test(e.name));
+      if (!emuProgram(p, e.name) || EMU_HELPER.test(programName(e.name))) continue;
+      const k = EMU_FIND.find(f => f.re.test(programName(e.name)));
       if (!k) continue;
-      const kind = k.catalog || e.name.toLowerCase();
+      const kind = k.catalog || programName(e.name);
       if (!found.has(kind)) found.set(kind, { k, exe: p });
     }
   };
@@ -2150,7 +2374,7 @@ handle('harbour:scanEmulators', async folder => {
     const name = c?.name || k.name || titleFromFolder(path.basename(exe, path.extname(exe)));
     const id = 'custom-' + (c ? c.id : name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
     if (known.has(exe.toLowerCase()) || (resolveExe(id) && config.customEmulators.some(e => e.id === id))) { skipped.push(name); continue; }
-    const consoles = (c?.consoles || k.consoles).filter(s => config.systems.some(x => x.id === s));
+    const consoles = (c?.consoles || k.consoles || []).filter(s => config.systems.some(x => x.id === s));
     config.customEmulators = config.customEmulators.filter(e => e.id !== id);
     config.customEmulators.push({ id, name, exe, args: c?.args || k.args, systems: consoles,
       ...(c ? { source: { ...c.source, prerelease: false }, scanned: true } : {}) });
@@ -2193,7 +2417,7 @@ handle('harbour:installEmulator', async catalogId => {
       for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
         const p = path.join(dir, e.name);
         if (e.isDirectory()) { if (depth < 3 && !exe) look(p, depth + 1); }
-        else if (e.name.toLowerCase() === c.exe.toLowerCase()) exe ||= p;
+        else if (c.exe && e.name.toLowerCase() === c.exe.toLowerCase()) exe ||= p;
       }
     };
     look(folder, 0);
@@ -2271,6 +2495,29 @@ handle('harbour:addGameFolder', async ({ system }) => {
   }
   saveConfig(config);
   return { added };
+});
+// The welcome screen's Next: the install folders made if they aren't there yet, and the games folder with a folder
+// per console inside (named as people know them, and as consoleForFolder reads them), each added as that console's
+// game folder. Games dropped into them later show up by themselves.
+const CONSOLE_FOLDER = {
+  a2600: 'Atari 2600', arcade: 'Arcade', nes: 'NES', genesis: 'Genesis', gb: 'Game Boy', snes: 'SNES', ps1: 'PS1', n64: 'N64',
+  gbc: 'Game Boy Color', dreamcast: 'Dreamcast', ps2: 'PS2', gba: 'GBA', gc: 'GameCube', xbox: 'Xbox', nds: 'DS', psp: 'PSP',
+  x360: 'Xbox 360', ps3: 'PS3', wii: 'Wii', '3ds': '3DS', wiiu: 'Wii U', ps4: 'PS4', switch: 'Switch', switch2: 'Switch 2',
+};
+handle('harbour:makeWelcomeFolders', async () => {
+  for (const kind of ['ports', 'emulators']) await fsp.mkdir(installDir(kind), { recursive: true }).catch(() => {});
+  const games = installDir('games');
+  await fsp.mkdir(games, { recursive: true });
+  const added = [];
+  for (const sys of config.systems) {
+    const name = CONSOLE_FOLDER[sys.id];
+    if (!name) continue;
+    const dir = path.join(games, name);
+    await fsp.mkdir(dir, { recursive: true });
+    if (addRomDir(sys, dir)) added.push({ system: sys.id, folder: dir });
+  }
+  saveConfig(config);
+  return { games, added };
 });
 handle('harbour:removeGameFolder', ({ system, folder }) => {
   const sys = config.systems.find(s => s.id === system);
@@ -2380,7 +2627,7 @@ async function emulatorDownload(source, { installer = false } = {}) {
     if (a) return { tag: rel.tag_name, publishedAt: rel.published_at, assetId: a.id, assetName: a.name, size: a.size || 0,
       url: a.browser_download_url, digest: null, page: rel.html_url || `https://${source.host}/${source.repo}/releases`, uploader: rel.author?.login || null };
   }
-  throw new Error(`No Windows download found in the recent releases of ${source.repo}.`);
+  throw new Error(`No ${process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'macOS' : 'Linux'} download found in the recent releases of ${source.repo}.`);
 }
 // Can Harbour write into this folder? (Program Files can't be written without admin rights.)
 function canWrite(folder) {
@@ -2400,7 +2647,11 @@ function runInstallerElevated(file) {
   });
 }
 const updatingEmus = new Set();
-handle('harbour:emuUpdate', async id => {
+handle('harbour:emuUpdate', id => emuUpdate(id).catch(err => {
+  if (!(err instanceof NotReadyToRun)) log(`emulator update ${config.customEmulators.find(x => x.id === id)?.name || id} failed: ${err.message}`);
+  throw err;
+}));
+async function emuUpdate(id) {
   const e = config.customEmulators.find(x => x.id === id);
   const exe = e && resolveExe(id);
   if (!e?.source) throw new Error('Set where this emulator\'s updates come from first (Updates…).');
@@ -2414,23 +2665,25 @@ handle('harbour:emuUpdate', async id => {
   try {
     send({ stage: 'Checking latest release…', pct: 0 });
     const folder = path.dirname(exe);
-    const viaInstaller = !canWrite(folder);
+    const viaInstaller = process.platform === 'win32' && !canWrite(folder);
     const rel = await emulatorDownload(e.source, { installer: viaInstaller });
     checkUploader(e.installed, rel, e.name);
-    if (!viaInstaller && /\.zip$/i.test(rel.assetName)) {
+    if (!viaInstaller && !isAppImage(exe) && /\.zip$/i.test(rel.assetName)) {
       const names = await remoteZipNames(rel.url);
       if (names && !names.some(n => n.split('/').pop().toLowerCase() === path.basename(exe).toLowerCase())) throw updatesWithOwnTool(e.source, e.name);
     }
-    const { archive, scan } = await fetchRelease(rel, tmp, send);
+    const { archive, scan } = await fetchRelease(rel, tmp, send, 'emu:' + id);
     let kept = [];
     if (viaInstaller) {
       send({ stage: 'Installing (approve the Windows prompt)…', pct: 1 });
       await runInstallerElevated(archive);
     } else {
       const src = await unpackRelease(rel, archive, tmp, send);
-      const root = placeRelease(src, exe);
-      if (!root) throw updatesWithOwnTool(e.source, e.name);
-      ({ kept } = await installInto(root, src, e.installed?.tag, send));
+      if (!(await swapAppImage(src, exe))) {
+        const root = placeRelease(src, exe);
+        if (!root) throw updatesWithOwnTool(e.source, e.name);
+        ({ kept } = await installInto(root, src, e.installed?.tag, send));
+      }
     }
     if (!fs.existsSync(exe)) throw new Error(`${path.basename(exe)} is gone after the update. Choose the program again in Emulators.`);
     e.installed = { tag: rel.tag, stamp: fileStamp(exe)?.id, uploader: rel.uploader || e.installed?.uploader };
@@ -2444,7 +2697,7 @@ handle('harbour:emuUpdate', async id => {
     updatingEmus.delete(id);
     fsp.rm(tmp, { recursive: true, force: true }).catch(() => {});
   }
-});
+}
 
 // ---------- Harbour's own updates ----------
 // A release of Harbour is a zip: Harbour.exe and the Electron runtime, with Harbour's own files in resources\app.
@@ -2452,10 +2705,14 @@ handle('harbour:emuUpdate', async id => {
 // can't be swapped in while Harbour runs, so that one is "update in app": its release page.
 const SELF_REPO = String(PACKAGE.repository?.url || PACKAGE.repository || '').replace(/^github:|^https:\/\/github\.com\/|\.git$/g, '');
 let selfCheck = null;  // { at, latest }
+// The release file for this system: the Windows zip, or on Linux the AppImage (the whole of OneDeck in one file,
+// swapped for the new one).
+const SELF_ASSET = process.env.APPIMAGE ? 'x86_64\\.AppImage$' : 'win64\\.zip$';
 async function harbourStatus(force = false) {
+  if (process.platform !== 'win32' && !process.env.APPIMAGE) return { packaged: app.isPackaged, current: APP_VERSION, updateAvailable: false };
   if (!app.isPackaged || !SELF_REPO) return { packaged: app.isPackaged, current: APP_VERSION, updateAvailable: false };
   if (force || !selfCheck || Date.now() - selfCheck.at > RECOMP_CHECK_MS) {
-    try { selfCheck = { at: Date.now(), latest: await findRelease(SELF_REPO, { asset: 'win64\\.zip$', prerelease: false }) }; }
+    try { selfCheck = { at: Date.now(), latest: await findRelease(SELF_REPO, { asset: SELF_ASSET, prerelease: false }) }; }
     catch (e) { return { packaged: true, current: APP_VERSION, updateAvailable: false, error: e.message }; }
   }
   const latest = selfCheck.latest;
@@ -2464,6 +2721,43 @@ async function harbourStatus(force = false) {
   return { packaged: true, current: APP_VERSION, updateAvailable: newer, latest: { tag: latest.tag, page: latest.page, notes: latest.notes } };
 }
 handle('harbour:selfStatus', force => harbourStatus(!!force));
+// What's new: this version's release notes (its GitHub release), shown once after OneDeck updates itself, and from
+// Settings → About. config.seenVersion is the version you last opened; a first install shows nothing.
+handle('harbour:whatsNew', () => {
+  const show = !!config.seenVersion && config.seenVersion !== APP_VERSION;
+  if (config.seenVersion !== APP_VERSION) { config.seenVersion = APP_VERSION; saveConfig(config); }
+  return { show, version: APP_VERSION };
+});
+handle('harbour:notes', async () => {
+  if (!SELF_REPO) return { version: APP_VERSION, notes: '', page: '' };
+  for (const tag of [`v${APP_VERSION}`, APP_VERSION]) {
+    try {
+      const rel = await ghJson(`https://api.github.com/repos/${SELF_REPO}/releases/tags/${encodeURIComponent(tag)}`);
+      return { version: APP_VERSION, notes: rel.body || '', page: rel.html_url || '' };
+    } catch (e) { if (e.status !== 404) throw e; }
+  }
+  return { version: APP_VERSION, notes: '', page: `https://github.com/${SELF_REPO}/releases` };
+});
+handle('downloads:pause', ({ key, on }) => pauseDownload(String(key || ''), !!on));
+// Feedback: what you type goes to hello@onedeck.org through Web3Forms (web3forms.com), with OneDeck's version and
+// Windows or Linux. Nothing else (no way to reply: it's anonymous), and only when you press Send. The key can only send to that inbox, so it can be public.
+// Sent with Electron's own network (net.fetch): Web3Forms turns away requests that don't come from a browser.
+const FEEDBACK_KEY = 'd79b27cb-cfa0-40ca-9441-443a2e07d8cc';
+handle('feedback:send', async ({ kind, message } = {}) => {
+  const text = String(message || '').trim().slice(0, 5000);
+  if (text.length < 3) throw new Error('Write a little more first.');
+  const what = { bug: 'Bug', idea: 'Idea' }[kind] || 'Feedback';
+  const system = `${process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'macOS' : 'Linux'} ${os.release()}`;
+  const body = { access_key: FEEDBACK_KEY, from_name: 'OneDeck', subject: `OneDeck ${what.toLowerCase()}: ${text.split('\n')[0].slice(0, 60)}`,
+    message: `${text}\n\n--\n${what} · OneDeck ${APP_VERSION} · ${system}` };
+  let r;
+  try { r = await net.fetch('https://api.web3forms.com/submit', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body) }); }
+  catch { throw new Error("Couldn't send: are you online? Your message is still there."); }
+  const out = await r.json().catch(() => null);
+  if (!r.ok || !out?.success) throw new Error(`Couldn't send (${out?.message || `error ${r.status}`}). Try again later.`);
+  log(`feedback sent (${what})`);
+  return true;
+});
 handle('harbour:selfUpdate', async () => {
   const st = await harbourStatus(true);
   if (!st.updateAvailable) return st;
@@ -2472,13 +2766,24 @@ handle('harbour:selfUpdate', async () => {
   const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'harbour-self-'));
   try {
     const { archive, scan } = await fetchRelease(rel, tmp, send);
+    if (process.env.APPIMAGE) {
+      send({ stage: 'Installing…', pct: 1 });
+      const next = process.env.APPIMAGE + '.new';
+      await fsp.copyFile(archive, next);
+      await fsp.chmod(next, 0o755);
+      await fsp.rename(next, process.env.APPIMAGE);
+      log(`harbour updated ${APP_VERSION} -> ${rel.tag} (AppImage)`);
+      send({ stage: 'Restarting…', pct: 1, done: true });
+      setTimeout(() => { app.relaunch({ execPath: process.env.APPIMAGE, args: process.argv.slice(1) }); app.exit(0); }, 800);
+      return { ...st, installed: rel.tag };
+    }
     const src = await unpackRelease(rel, archive, tmp, send);
     const appSrc = path.join(src, 'resources', 'app');
-    if (!fs.existsSync(path.join(appSrc, 'main.js'))) throw new Error('That release doesn\'t look like Harbour.');
+    if (!fs.existsSync(path.join(appSrc, 'main.js'))) throw new Error('That release doesn\'t look like OneDeck.');
     const runtime = (() => { try { return fs.readFileSync(path.join(src, 'electron-version.txt'), 'utf8').trim(); } catch { return ''; } })();
     if (runtime && runtime !== process.versions.electron) {
       await shell.openExternal(rel.page);
-      throw new NotReadyToRun('This Harbour update needs a fresh download: update in app (its release page is open).');
+      throw new NotReadyToRun('This OneDeck update needs a fresh download: update in app (its release page is open).');
     }
     send({ stage: 'Installing…', pct: 1 });
     const backup = path.join(DATA, '_harbour-backup', 'harbour-' + APP_VERSION);
@@ -2530,7 +2835,7 @@ async function rememberRelease(id, dir) {
 async function releaseFilesOf(entry) {
   try { return new Map(Object.entries(JSON.parse(await fsp.readFile(manifestFile(entry.id), 'utf8')))); } catch {}
   try {
-    const rel = await findRelease(entry.source.repo, { asset: entry.source.asset, prerelease: entry.source.prerelease });
+    const rel = await findRelease(entry.source.repo, { asset: entry.source.asset, prerelease: entry.source.prerelease, orWindows: true });
     const all = await remoteZipNames(rel.url), names = all?.filter(n => !n.endsWith('/'));
     if (!names?.length) return null;
     const top = names[0].split('/')[0] + '/';  // a zip holding one folder: it was unpacked without it
@@ -2541,7 +2846,7 @@ async function releaseFilesOf(entry) {
 // Removes what the install put there (files changed since are yours and stay), then any folders left empty.
 async function removeInstalled(entry) {
   const release = await releaseFilesOf(entry);
-  if (!release) throw new Error("Harbour can't tell which files came with it, so it didn't delete anything. Undock it instead.");
+  if (!release) throw new Error("OneDeck can't tell which files came with it, so it didn't delete anything. Undock it instead.");
   const ownGameFile = entry.gameFile && path.relative(entry.path, path.join(path.dirname(entry.executable), entry.gameFile)).split(path.sep).join('/').toLowerCase();
   let removed = 0, left = 0;
   for (const rel of await filesIn(entry.path)) {
@@ -2567,7 +2872,7 @@ handle('game:delete', async gameId => {
   const game = libraryGames.find(g => g.id === gameId && g.recomp);
   const entry = game && config.extraGames.find(x => x.id === game.added);
   if (!entry) throw new Error('Select a PC port first.');
-  if (!inPortsDir(entry)) throw new Error('Harbour only deletes ports it installed itself. Undock this one instead.');
+  if (!inPortsDir(entry)) throw new Error('OneDeck only deletes ports it installed itself. Undock this one instead.');
   if (running.has(gameId) || isRunning(entry.executable)) throw new Error('Close the game first.');
   let result;
   try { result = await removeInstalled(entry); }
@@ -2615,7 +2920,91 @@ handle('recomp:checkAll', async force => {
   await mapLimit(ids, 4, async id => { out[id] = await checkRecomp(id, !!force); });
   return out;
 });
-handle('recomp:update', gameId => updateRecomp(gameId, p => win.webContents.send('recomp:progress', p)));
+// ---- A port's own launcher: Update installs it (once) and runs it ----
+// Its own folder in Ports (named after the project; an old setup kit OneDeck put there is replaced, as the launcher
+// would otherwise act as that kit), checked against the release's checksum and scanned. It's told where the game
+// already is (<Name>-Recomp\launcher.json "dest"), so it opens on Update, not on a first install. When it closes,
+// OneDeck checks the version again (the game's version file, see versionOnDisk).
+const runningLaunchers = new Set();
+async function placeLauncher(repo, asset, title) {
+  const folder = path.join(installDir('ports'), repo.split('/')[1].replace(/[<>:"|?*]/g, ''));
+  // the old setup kit (its own Python beside a *-Setup.exe): replaced, as the launcher would act as that kit
+  if (fs.existsSync(path.join(folder, 'python')) && fs.readdirSync(folder).some(n => /-setup\.exe$/i.test(n))) {
+    await fsp.rm(folder, { recursive: true, force: true });
+    log(`removed the old setup kit in ${folder} (the launcher replaces it)`);
+  }
+  await fsp.mkdir(folder, { recursive: true });
+  const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'onedeck-launcher-'));
+  try {
+    const file = path.join(tmp, asset.name);
+    const r = await fetch(asset.url, { headers: UA });
+    if (!r.ok) throw new Error(`Couldn't download ${asset.name} (${r.status}).`);
+    await downloadTo(r, file);
+    if (asset.digest?.startsWith('sha256:') && (await sha256File(file)) !== asset.digest.slice(7).toLowerCase())
+      throw new Error(`${asset.name} doesn't match its published checksum. Nothing was installed.`);
+    const scan = await defenderScan(file);
+    const exe = path.join(folder, asset.name);
+    await fsp.copyFile(file, exe);
+    log(`installed ${asset.name} for ${title} in ${folder} (defender: ${scan})`);
+    return exe;
+  } finally { fsp.rm(tmp, { recursive: true, force: true }).catch(() => {}); }
+}
+const launcherBase = exe => path.join(path.dirname(exe), path.basename(exe).replace(/-launcher\.exe$/i, '') + '-Recomp');
+// After the launcher closes: a game installed through it plays its built program (the launcher's install folder,
+// from launcher.json), once there is one.
+function adoptLauncherBuild(entry) {
+  if (!entry.updater || (entry.executable && path.resolve(entry.executable) !== path.resolve(entry.updater))) return;
+  let dest = '';
+  try { dest = JSON.parse(fs.readFileSync(path.join(launcherBase(entry.updater), 'launcher.json'), 'utf8')).dest || ''; } catch {}
+  const exe = dest && fs.existsSync(dest) && findGameExe(dest, { repo: entry.source?.repo, title: entry.title });
+  if (exe && path.resolve(exe) !== path.resolve(entry.updater)) { entry.executable = exe; saveConfig(config); log(`${entry.title} now starts ${exe}`); }
+}
+handle('recomp:runLauncher', async gameId => {
+  const { game, entry } = recompEntry(gameId);
+  const repo = entry.source?.repo;
+  if (!repo) throw new Error('Set an update source for this game first.');
+  if (runningLaunchers.has(gameId)) throw new Error(`${game.title}'s launcher is already open.`);
+  if (running.has(gameId) || isRunning(entry.executable)) throw new Error('Close the game before updating it.');
+  const send = p => win?.webContents.send('recomp:progress', { gameId, ...p });
+  let exe = entry.updater && fs.existsSync(entry.updater) ? entry.updater : null;
+  if (!exe) {
+    send({ stage: 'Getting its launcher…', pct: 0 });
+    const rel = await findRelease(repo, { prerelease: !!entry.source.prerelease, orWindows: true });
+    if (!rel.launcher) throw new Error(`${repo} has no launcher to update with. Open its release page instead.`);
+    exe = await placeLauncher(repo, rel.launcher, game.title);
+    entry.updater = exe; saveConfig(config);
+  }
+  // where the game is: the launcher keeps it in <Name>-Recomp\launcher.json beside itself
+  const base = launcherBase(exe);
+  const settingsFile = path.join(base, 'launcher.json');
+  if (!fs.existsSync(settingsFile) && entry.executable && path.resolve(entry.executable) !== path.resolve(exe)) {
+    await fsp.mkdir(base, { recursive: true });
+    fs.writeFileSync(settingsFile, JSON.stringify({ dest: path.dirname(entry.executable), check_updates: true }, null, 1) + '\n');
+  }
+  send({ stage: 'Updating in its own window', pct: 1, done: true });
+  runningLaunchers.add(gameId);
+  // The game older than the latest release (built by an older kit, or the launcher's tools arrived already current):
+  // --after-update, the launcher's own "rebuild the install folder now", so Update goes straight to the rebuild.
+  let dest = ''; try { dest = JSON.parse(fs.readFileSync(settingsFile, 'utf8')).dest || ''; } catch {}
+  const have = dest && versionOnDisk(path.join(dest, '_'));
+  const want = recompChecks.get(gameId)?.latest?.tag;
+  const rebuild = !!(have && want && !sameVersion(have, want));
+  const child = spawn(exe, rebuild ? ['--after-update'] : [], { cwd: path.dirname(exe), detached: true, stdio: 'ignore', windowsHide: false });
+  if (rebuild) log(`${game.title} is ${have}, the latest is ${want}: its launcher rebuilds it`);
+  child.once('error', () => runningLaunchers.delete(gameId));
+  child.once('exit', () => {
+    runningLaunchers.delete(gameId);
+    adoptLauncherBuild(entry);
+    // the launcher hands over to the new version's window, which can keep updating for a while: check now and again
+    for (const ms of [2000, 60000, 300000]) setTimeout(() => { recompChecks.delete(gameId); win?.webContents.send('recomp:recheck', gameId); }, ms);
+  });
+  log(`started ${path.basename(exe)} for ${game.title}`);
+  return true;
+});
+handle('recomp:update', gameId => updateRecomp(gameId, p => win.webContents.send('recomp:progress', p)).catch(err => {
+  if (!(err instanceof NotReadyToRun)) log(`recomp update ${gameId} failed: ${err.message}`);
+  throw err;
+}));
 handle('recomp:openPage', async gameId => {
   const { entry } = recompEntry(gameId);
   const page = recompChecks.get(gameId)?.latest?.page || (entry.source?.repo && `https://github.com/${entry.source.repo}/releases`);
@@ -2640,6 +3029,183 @@ handle('video:start', options => videos.start(options || {}));
 const clipFolders = () => { try { return fs.readdirSync(path.join(DATA, 'media'), { withFileTypes: true }).filter(e => e.isDirectory() && !e.name.startsWith('_')).map(e => path.join(DATA, 'media', e.name, 'videos')).filter(d => fs.existsSync(d)); } catch { return []; } };
 const folderSize = dir => fs.readdirSync(dir, { withFileTypes: true }).reduce((n, e) => n + (e.isDirectory() ? folderSize(path.join(dir, e.name)) : fs.statSync(path.join(dir, e.name)).size), 0);
 handle('video:status', () => videos.status());
+
+// ---------- Cloud saves (cloudsaves.js drives OpenSave) ----------
+// On in Settings → Cloud saves: OpenSave's program is fetched once, then runs while OneDeck does. config.cloudSaves
+// says it's on; config.savesFor maps a OneDeck game id to the OpenSave game that holds its saves.
+const saves = createCloudSaves({ dataDir: DATA, ghJson, sha256File, extract, log,
+  downloadFile: (url, file, onBytes) => artwork.download(url, file, onBytes) });
+const savesProgress = text => sendWindow('saves:progress', text);
+// OneDeck's Saves folder (savefolders.js): the emulators OneDeck starts save into a folder each there. With cloud saves
+// on, each of those folders syncs by itself under the same name on every device ("DuckStation saves (OneDeck)"), and
+// one offered from another device goes straight into its folder here. config.saveFolders remembers which settings
+// files were pointed there; config.savesConsoles is the consoles whose saves sync that way; config.savesSkip the
+// folders you stopped syncing.
+const saveFolders = createSaveFolders({ root: () => installDir('saves'), setFileValues, log,
+  gamesFor: consoles => libraryGames.filter(g => consoles.includes(g.system)).flatMap(g => g.discPaths?.length ? g.discPaths : [g.romPath]).filter(Boolean),
+  marked: key => config.saveFolders?.[key],
+  mark: (key, dir) => { config.saveFolders = { ...(config.saveFolders || {}), [key]: dir }; saveConfig(config); } });
+function moveSaves(exe, rom) {
+  const f = saveFolders.apply(exe, rom);
+  if (f?.fresh && config.cloudSaves) syncSaveFolders().catch(e => log(`cloud saves: ${e.message}`));
+}
+// Every emulator OneDeck knows: its saves moved without waiting for a game to be played.
+function moveAllSaves() {
+  const ids = new Set(config.systems.map(s => s.emulator).filter(Boolean));
+  for (const id of ids) { try { const exe = resolveExe(id); if (exe) saveFolders.apply(exe); } catch {} }
+}
+let savesSyncing = null;
+const OURS = / saves \(OneDeck\)$/;
+function syncSaveFolders() {
+  savesSyncing ||= (async () => {
+    if (!config.cloudSaves) return;
+    const st = await saves.status();
+    if (!st.running) return;
+    const skip = new Set(config.savesSkip || []), have = new Set((st.games || []).map(g => g.name));
+    // A conflict in one of these folders: combined, not asked about (see savefolders.js merge).
+    for (const c of running.size ? [] : st.conflicts || []) {  // never while a game is being played: it waits for the next check
+      const g = (st.games || []).find(x => x.id === c.gameId);
+      if (g && OURS.test(g.name)) await saveFolders.merge({ saves, id: g.id, name: g.name, folder: g.path }).catch(e => log(`cloud saves: couldn't combine ${g.name}: ${e.message}`));
+    }
+    for (const f of saveFolders.all()) {
+      if (skip.has(f.cloudName) || have.has(f.cloudName)) continue;
+      const offer = (st.offers || []).find(o => o.name === f.cloudName);
+      if (offer) { await saves.place(offer.gameId, f.folder); have.add(f.cloudName); log(`cloud saves: ${f.cloudName} from another device, into ${f.folder}`); }
+      else if (fs.existsSync(f.folder)) { await saves.track(f.cloudName, f.folder); have.add(f.cloudName); log(`cloud saves: syncing ${f.folder}`); }
+    }
+    const consoles = saveFolders.all().filter(f => have.has(f.cloudName)).flatMap(f => f.consoles);
+    if (JSON.stringify(consoles) !== JSON.stringify(config.savesConsoles || [])) { config.savesConsoles = consoles; saveConfig(config); }
+  })().finally(() => { savesSyncing = null; });
+  return savesSyncing;
+}
+// Checked now and then too, for folders another device starts syncing later.
+let savesTimer = null;
+const startSavesTimer = () => { savesTimer ||= setInterval(() => syncSaveFolders().catch(() => {}), 5 * 60 * 1000); };
+
+handle('saves:status', async () => {
+  const st = await saves.status();
+  const name = id => (st.games || []).find(g => g.id === id)?.name || '';
+  const ours = st.running && ((st.offers || []).some(o => OURS.test(o.name || '')) || (st.conflicts || []).some(c => OURS.test(name(c.gameId))));
+  if (ours) await syncSaveFolders().catch(() => {});
+  return { on: !!config.cloudSaves, savesFor: config.savesFor || {}, savesConsoles: config.savesConsoles || [], savesRoot: installDir('saves'),
+    ...(ours ? await saves.status() : st) };
+});
+// Every game's cloud sync state (cloudsaves.js syncStates), and which OpenSave entry is whose: a game you set up
+// (config.savesFor), or an emulator's Saves folder for its consoles.
+handle('saves:states', async () => {
+  if (!config.cloudSaves) return null;
+  const states = await saves.syncStates().catch(() => null);
+  if (!states) return null;
+  const byName = Object.fromEntries(Object.entries(states).map(([id, s]) => [s.name, id]));
+  const consoles = {};
+  for (const f of saveFolders.all()) { const id = byName[f.cloudName]; if (id) for (const c of f.consoles) consoles[c] = id; }
+  return { states, consoles, savesFor: config.savesFor || {} };
+});
+handle('saves:enable', async () => {
+  if (!saves.installed()) await saves.install(savesProgress);
+  savesProgress('Starting OpenSave…');
+  await saves.start();
+  await saves.scanFolders([installDir('emulators'), installDir('ports')]);
+  config.cloudSaves = true; saveConfig(config);
+  moveAllSaves();
+  await syncSaveFolders().catch(e => log(`cloud saves: ${e.message}`));
+  startSavesTimer();
+  return true;
+});
+handle('saves:disable', () => { saves.stop(); config.cloudSaves = false; saveConfig(config); return true; });
+// Link a device: this one makes a code and waits in its room; the other types it in (joinCode) and asks to link.
+handle('saves:newCode', async () => saves.joinCode(saves.newCode()));
+handle('saves:joinCode', async code => {
+  const c = await saves.joinCode(code);
+  // Give the room a moment to show who's in it, then ask each device there to link (they say yes on their side).
+  for (let i = 0; i < 20; i++) {
+    await new Promise(r => setTimeout(r, 1000));
+    const st = await saves.status();
+    const there = (st.nearby || []).filter(p => p.overRelay);
+    if (there.length) { for (const p of there) await saves.askToLink(p).catch(e => log(`link request failed: ${e.message}`)); return { code: c, asked: there.length }; }
+  }
+  return { code: c, asked: 0 };
+});
+handle('saves:link', async peer => saves.askToLink(peer));
+handle('saves:approve', id => saves.approve(String(id)));
+handle('saves:reject', id => saves.reject(String(id)));
+handle('saves:unlink', id => saves.unlink(String(id)));
+handle('saves:leaveCode', () => saves.leaveCode());
+handle('saves:suggest', title => saves.suggest(String(title || '')));
+handle('saves:pickFolder', async title => {
+  const r = await dialog.showOpenDialog(win, { title: title || 'Choose the save folder', properties: ['openDirectory', 'createDirectory'] });
+  return r.canceled ? null : r.filePaths[0];
+});
+// Sync a game's saves: OpenSave tracks the folder under the game's name; OneDeck remembers which game it belongs to.
+handle('saves:track', async ({ gameId, name, folder }) => {
+  if (!folder || !fs.existsSync(folder)) throw new Error("That folder isn't there.");
+  const r = await saves.track(String(name || path.basename(folder)).slice(0, 80), folder);
+  const st = await saves.status();
+  const g = (st.games || []).find(x => path.resolve(x.path) === path.resolve(folder));
+  if (gameId && g) { config.savesFor = { ...(config.savesFor || {}), [gameId]: g.id }; saveConfig(config); }
+  log(`cloud saves: tracking ${name} at ${folder}`);
+  return r;
+});
+handle('saves:untrack', async id => {
+  // One of the Saves folder's: remembered, so it isn't added back by itself.
+  const g = ((await saves.status()).games || []).find(x => x.id === id);
+  if (g && OURS.test(g.name)) {
+    config.savesSkip = [...new Set([...(config.savesSkip || []), g.name])];
+    config.savesConsoles = (config.savesConsoles || []).filter(c => !(saveFolders.all().find(f => f.cloudName === g.name)?.consoles || []).includes(c));
+  }
+  await saves.untrack(String(id));
+  config.savesFor = Object.fromEntries(Object.entries(config.savesFor || {}).filter(([, v]) => v !== id)); saveConfig(config);
+  return true;
+});
+handle('saves:place', ({ gameId, folder }) => saves.place(String(gameId), folder));
+handle('saves:decline', gameId => saves.decline(String(gameId)));
+handle('saves:resolve', ({ gameId, choice }) => {
+  if (!['keep-both', 'keep-local', 'keep-remote'].includes(choice)) throw new Error('Unknown choice.');
+  return saves.resolve(String(gameId), choice);
+});
+handle('saves:syncNow', () => saves.syncNow());
+handle('saves:openFolder', p => { if (p && fs.existsSync(p)) shell.openPath(p); return true; });
+// Also through a folder: a OneDrive, Dropbox or Google Drive folder on this PC carries saves to devices that aren't on.
+handle('saves:useFolder', async () => {
+  const r = await dialog.showOpenDialog(win, { title: 'Choose a folder your cloud drive syncs (OneDrive, Dropbox, Google Drive…)', properties: ['openDirectory', 'createDirectory'] });
+  if (r.canceled) return null;
+  const folder = path.join(r.filePaths[0], 'OneDeck saves');
+  fs.mkdirSync(folder, { recursive: true });
+  await saves.useFolder(folder);
+  return folder;
+});
+handle('saves:disconnectCloud', () => saves.disconnectCloud());
+// Dropbox sign-in, for a PC without Dropbox's own app (Linux, a Steam Deck): Dropbox's page opens in a OneDeck window,
+// and where it sends you back (localhost/callback?code=…) is caught here, so there's no code to copy.
+handle('saves:dropbox', async () => {
+  const start = await saves.connectStart('dropbox');
+  if (!start?.authUrl || !/^https:\/\/www\.dropbox\.com\//.test(start.authUrl)) throw new Error("OpenSave didn't give a Dropbox sign-in link.");
+  const code = await new Promise((resolve, reject) => {
+    const w = new BrowserWindow({ parent: win, modal: true, width: 520, height: 720, title: 'Sign in to Dropbox', autoHideMenuBar: true,
+      webPreferences: { partition: 'onedeck-dropbox', contextIsolation: true, sandbox: true } });
+    let done = false;
+    const check = (e, url) => {
+      if (!/^http:\/\/localhost\/callback/.test(url)) return;
+      e?.preventDefault?.(); done = true;
+      const u = new URL(url), c = u.searchParams.get('code');
+      w.close();
+      c ? resolve(c) : reject(new Error(u.searchParams.get('error_description') || 'Dropbox sign-in was cancelled.'));
+    };
+    w.webContents.on('will-redirect', check); w.webContents.on('will-navigate', check);
+    w.on('closed', () => { if (!done) reject(new Error('Dropbox sign-in was closed.')); });
+    w.loadURL(start.authUrl);
+  });
+  await saves.connectFinish('dropbox', code);
+  log('cloud saves: Dropbox connected');
+  return true;
+});
+// On with OneDeck, off when it quits (unless OpenSave's own app or service is the one running).
+app.whenReady().then(() => {
+  if (config.cloudSaves && saves.installed()) saves.start().then(() => { startSavesTimer(); return new Promise(r => setTimeout(r, 4000)).then(syncSaveFolders); })
+    .catch(e => log(`OpenSave didn't start: ${e.message}`));
+});
+app.on('will-quit', () => saves.stop());
+process.on('exit', () => saves.stop());  // also when OneDeck ends without a normal quit
 handle('video:cancel', () => { videos.cancel(); return true; });
 handle('art:start', options => artwork.start(options));
 handle('art:status', () => artwork.status());

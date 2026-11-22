@@ -1,21 +1,18 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="ui/assets/brand/harbour-logo-dark.png">
-  <img alt="Harbour" src="ui/assets/brand/harbour-logo-light.png" width="380">
-</picture>
+<img alt="OneDeck" src="ui/assets/brand/onedeck-banner.png" width="640">
 
-# Your PC ports, recomps, and emulators all on one shelf. Installed and kept up to date automatically.
+# Emulators and PC ports, all on OneDeck.
 
-![Harbour](docs/shelf.png)
+![OneDeck](docs/shelf.jpg)
 
 ## What makes it different
 
-- **Ports and emulators together**, all on one shelf.
-- **Automatically shows available ports**, along with their playability score.
-- **1,300+ ports** from [Recompendium](https://recompendium.com/)'s catalogue: pick one, choose your game file, done.
-- **Emulators in one click:** Harbour installs them and sets fullscreen and resolution. Some still run their own first-time setup.
-- **One-click updates** for ports and emulators, checked before they're installed.
+- **Every console, one deck:** OneDeck sorts your games by console, with box art, logos and video previews fetched for you.
+- **Emulators, set up for you:** OneDeck installs the right emulator for your game and auto-applies settings for your screen. 20 emulators, from NES to Switch 2.
+- **PC ports in one click:** OneDeck searches [Recompendium](https://recompendium.com/) for native PC ports of your games, with their playability score. Want to add your own? Paste its GitHub link.
+- **Always up to date:** update your ports and emulators in one click.
+- **Cloud saves:** link your devices with a code, or use a cloud storage service.
 
-![Port catalogue](docs/ports.png)
+![Port catalogue](docs/ports.jpg)
 
 ## Badges
 
@@ -28,17 +25,19 @@
 
 ## Get it
 
-Windows 10 and 11. Download the zip from [Releases](https://github.com/goodthanksdev/harbour/releases), unzip, run
-`Harbour.exe`. If Windows warns you: **More info → Run anyway**.
+Windows 10 and 11. Download the zip from [Releases](https://github.com/onedeck-launcher/onedeck/releases), unzip, run
+`OneDeck.exe`. If Windows warns you: **More info → Run anyway**.
 
-No games, ROMs or keys included: bring your own.
+Linux: coming soon.
+
+OneDeck doesn't include any games or system files: bring your own. Not affiliated with any console maker.
 
 ## Built on
 
 [PyroCade](https://github.com/Pyrodrifter/PyroCade) · [Recompendium](https://recompendium.com/) ·
-[LaunchBox Games Database](https://gamesdb.launchbox-app.com/) · [GameTDB](https://www.gametdb.com/) ·
-[libretro thumbnails](https://thumbnails.libretro.com/) · [Electron](https://www.electronjs.org/) ·
-[yt-dlp](https://github.com/yt-dlp/yt-dlp) · [FFmpeg](https://ffmpeg.org/)
+[OpenSave](https://github.com/Liquid-co/OpenSave) · [LaunchBox Games Database](https://gamesdb.launchbox-app.com/) ·
+[GameTDB](https://www.gametdb.com/) · [libretro thumbnails](https://thumbnails.libretro.com/) ·
+[Electron](https://www.electronjs.org/) · [yt-dlp](https://github.com/yt-dlp/yt-dlp) · [FFmpeg](https://ffmpeg.org/)
 
 ## License
 

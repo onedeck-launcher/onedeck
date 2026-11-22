@@ -1,9 +1,12 @@
 /* Harbour: one big picture, a row of covers along the bottom. Nothing moves unless you do. */
 :root {
-  --accent: #5fd6cc; --accent2: #a6eee7; --beam: #ffb547;
+  --accent: #5fd6cc; --accent2: #a6eee7;
+  /* status teal (up to date, done, fully playable): never takes a console's colour, so it always means the same */
+  --ok: #5fd6cc; --beam: #ffb547;
   --text: #eef3f8; --muted: #9fb0c2; --dim: #6c7d90;
   --panel: rgba(10, 18, 30, .78); --line: rgba(255, 255, 255, .1);
   --u: calc(100vh / 1080); /* 1 design pixel at 1080p, scales with the window */
+  --ui: 1.2;
   --row-h: calc(210 * var(--u));
   --shelf-h: calc(var(--row-h) + 44 * var(--u)); /* the cover shelf along the bottom: covers + hints */
   color-scheme: dark;
@@ -48,29 +51,49 @@ body.ambient #hero { bottom: 0; }
 .chrome { position: relative; z-index: 2; transition: opacity 1.2s ease; }
 #top { position: fixed; top: 0; left: 0; right: 0; display: flex; align-items: center; gap: calc(28 * var(--u)); padding: calc(26 * var(--u)) calc(56 * var(--u)); }
 .brand { display: flex; align-items: center; gap: calc(10 * var(--u)); font-size: calc(24 * var(--u)); letter-spacing: .22em; font-weight: 300; white-space: nowrap; }
-/* The mark is centred on the letters plus their reflection, not on the text box: 0.31em lower. */
-.brand img { height: calc(38 * var(--u)); transform: translateY(.31em); }
-/* Wordmark: white letters with a teal reflection in the water below, broken into a few soft ripples. */
-.brand .word { position: relative; font-weight: 700; letter-spacing: .24em; color: #fff; }
-/* The copy sits on the word and is flipped and slanted about the letters' baseline (1.06em down in Segoe UI), so each
-   reflected letter starts right under its letter. */
-.brand .word::after { content: attr(data-text); position: absolute; left: 0; top: 0; pointer-events: none;
-  transform: scaleY(-.8) skewX(-10deg); transform-origin: 0 1.06em;
-  background: repeating-linear-gradient(to bottom, #7ff0e2 0 .23em, transparent .23em .27em);
-  -webkit-background-clip: text; background-clip: text; color: transparent;
-  filter: drop-shadow(0 0 .18em rgba(79, 214, 196, .45));
-  -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, .3) 0%, #000 75%); }
+/* OneDeck wordmark: ONE light, DECK bold, white (a console tab shows just its name), the two cards beside it. */
+/* The cards take the accent: teal, or the console's colour on its tab. Front a lighter shade of it, back a deeper one. */
+@property --accent { syntax: '<color>'; inherits: true; initial-value: #5fd6cc; }
+:root { transition: --accent .6s ease; }
+.brand .mark { flex: none; width: calc(34 * var(--u)); height: calc(34 * var(--u));
+  display: block; }
+.brand .mark svg { display: block; width: 100%; height: 100%; }
+.brand .mark .front { fill: color-mix(in srgb, var(--accent) 82%, #fff); }
+.brand .mark .back { fill: color-mix(in srgb, var(--accent) 76%, #000); }
+.brand .mark .play { fill: #07080c; stroke: #07080c; stroke-width: 4; stroke-linejoin: round; }
+.brand .word { font-weight: 700; letter-spacing: .2em; color: #fff; }
+.brand .word .light { font-weight: 300; }
 /* Console tabs: the selected one sits in the middle of the screen, the rest slide along and fade out at the edges. */
 #tabsView { position: absolute; left: 22%; right: 22%; top: 0; bottom: 0; overflow: hidden; pointer-events: none;
   -webkit-mask-image: linear-gradient(to right, transparent, #000 14%, #000 86%, transparent); }
+/* With a pad, LB and RB sit at the two ends of the strip: the tabs fade out before them. */
+body.pad #tabsView { -webkit-mask-image: linear-gradient(to right, transparent 7%, #000 20%, #000 80%, transparent 93%); }
 #tabs { position: absolute; left: 0; top: 50%; display: flex; gap: calc(6 * var(--u)); pointer-events: auto;
   transform: translate(var(--tx, 0px), -50%); transition: transform .3s cubic-bezier(.2,.7,.2,1); }
 .top-right { margin-left: auto; }
+/* Everything in the top bar sits above the console tabs: tabs that slide off under the logo, clock or buttons are faded
+   out, and must never catch their clicks. */
+#top > :not(#tabsView):not(.tabkey) { position: relative; z-index: 1; }
+/* Top left: the logo, then the clock after a thin line. Top right: updates, search, view, add. Bottom right: Settings. */
+#clock { color: var(--muted); font-size: calc(18 * var(--u) * var(--ui)); padding-left: calc(22 * var(--u)); border-left: 1px solid var(--line); line-height: 1.3; white-space: nowrap; }
+#corner { position: fixed; right: calc(36 * var(--u)); bottom: calc(14 * var(--u)); z-index: 3; }
+/* A big round target: easy to hit with a mouse, a light circle behind it on hover. */
+#corner .icon-btn { font-size: calc(30 * var(--u) * var(--ui)); line-height: 1; width: calc(48 * var(--u) * var(--ui)); height: calc(48 * var(--u) * var(--ui)); padding: 0;
+  display: grid; place-items: center; border-radius: 50%; color: rgba(238, 243, 248, .88); }
+#corner .icon-btn:hover, #corner .icon-btn:focus-visible { color: #fff; background: rgba(255, 255, 255, .1); }
+/* Over bright game art the top bar's icons and clock still read. */
+.top-right .icon-btn, #clock, #corner .icon-btn { text-shadow: 0 1px 6px rgba(0, 0, 0, .7); }
+.top-right .icon-btn { color: rgba(238, 243, 248, .88); }
+.top-right .icon-btn:hover, .top-right .icon-btn:focus-visible { color: #fff; }
+.top-right .icon-btn svg { filter: drop-shadow(0 1px 4px rgba(0, 0, 0, .7)); }
 .tab { background: none; border: 1px solid transparent; border-radius: 999px; padding: calc(7 * var(--u)) calc(16 * var(--u)); font-size: calc(18 * var(--u)); color: var(--muted); white-space: nowrap; }
 .tab .n { opacity: .55; font-size: .8em; margin-left: .4em; }
 .tab.on { background: var(--text); color: #08111c; font-weight: 700; }
 .tab:hover:not(.on) { color: var(--text); background: rgba(255,255,255,.07); }
-.top-right { display: flex; align-items: center; gap: calc(18 * var(--u)); color: var(--muted); font-size: calc(18 * var(--u)); }
+.top-right { display: flex; align-items: center; gap: calc(18 * var(--u) * var(--ui)); color: var(--muted); font-size: calc(18 * var(--u) * var(--ui)); }
+/* --ui: Settings → Top bar size, for the top-right buttons, the clock and the Settings cog (1 = 100%). */
+.top-right .icon-btn { font-size: calc(20 * var(--u) * var(--ui)); }
+#updatePill { font-size: calc(15 * var(--u) * var(--ui)); padding: calc(4 * var(--u) * var(--ui)) calc(12 * var(--u) * var(--ui)); }
 .icon-btn { padding: calc(6 * var(--u)) calc(12 * var(--u)); font-size: calc(20 * var(--u)); background: none; border-color: transparent; }
 .pill { border-radius: 999px; padding: calc(4 * var(--u)) calc(12 * var(--u)); font-size: calc(15 * var(--u)); font-weight: 700; }
 .pill.new { background: var(--beam); color: #2a1702; }
@@ -85,9 +108,12 @@ body.ambient #hero { bottom: 0; }
 .act.in { animation: actIn .3s ease; }
 .act.out { opacity: 0; transform: translateX(16px); }
 .act .txt { overflow: hidden; text-overflow: ellipsis; }
+/* A problem is read in full: it wraps (and stays longer, see Activity.fail). */
+.act.bad { white-space: normal; border-radius: calc(14 * var(--u)); align-items: flex-start; }
+.act.bad .txt { overflow: visible; line-height: 1.35; }
 .act .ico { flex: none; width: calc(18 * var(--u)); height: calc(18 * var(--u)); border-radius: 50%; display: grid; place-items: center; font-size: calc(12 * var(--u)); font-weight: 800; }
 .act.busy .ico { border: 2px solid rgba(255,255,255,.18); border-top-color: var(--accent); animation: spin .8s linear infinite; }
-.act.ok .ico { background: var(--accent); color: #06121c; }
+.act.ok .ico { background: var(--ok); color: #06121c; }
 .act.bad .ico { background: #d9534f; color: #fff; }
 .act .bar { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--accent); transition: width .3s ease; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -120,12 +146,17 @@ button.waiting { display: inline-flex; align-items: center; justify-content: cen
 #rowWrap { -webkit-mask-image: linear-gradient(to right, transparent 0, #000 7%, #000 93%, transparent 100%); }
 /* ---------- tile view: a grid of covers over the picture ---------- */
 body.tilesview { --shelf-h: calc(44 * var(--u)); }
-body.tilesview #rowWrap, body.tilesview #info { display: none; }
-#tilesWrap { position: fixed; z-index: 2; left: calc(48 * var(--u)); right: calc(48 * var(--u)); top: calc(86 * var(--u)); bottom: calc(52 * var(--u));
-  overflow-y: auto; padding: calc(14 * var(--u)); border-radius: calc(14 * var(--u)); background: rgba(6, 11, 20, .55); backdrop-filter: blur(8px); scrollbar-width: thin; }
-#tiles { --tile: calc(var(--row-h) * .78); display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tile), 1fr)); gap: calc(16 * var(--u)); }
+body.tilesview #rowWrap { display: none; }
+/* Like list view: the selected game's details on the left, the grid of covers on the right. */
+body.tilesview #info { right: 52%; }
+#tilesWrap { position: fixed; z-index: 2; right: calc(48 * var(--u)); top: calc(86 * var(--u)); max-height: calc(100vh - 138 * var(--u)); width: 46%;  /* as tall as its games */
+  overflow-y: auto; padding: calc(20 * var(--u)); border-radius: calc(14 * var(--u)); background: rgba(6, 11, 20, .55); backdrop-filter: blur(8px); scrollbar-width: thin; }
+#tiles { --tile: calc(var(--row-h) * .62); display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--tile), 1fr)); gap: calc(14 * var(--u)); }
 #tiles .tile { position: relative; aspect-ratio: .7; border-radius: calc(10 * var(--u)); overflow: hidden; cursor: pointer;
-  background: #142233 center/cover no-repeat; box-shadow: 0 6px 18px rgba(0,0,0,.45); opacity: .82; transition: transform .15s ease, opacity .15s, box-shadow .15s; }
+  background: #0b1522 center/contain no-repeat; box-shadow: 0 6px 18px rgba(0,0,0,.45); opacity: .82; transition: transform .15s ease, opacity .15s, box-shadow .15s; }
+#tiles .tile.art { isolation: isolate; }
+#tiles .tile.art { background-color: #16191e; }  /* wide covers (N64, SNES): dark bars above and below */
+#tiles .tile.art::after { content: ''; position: absolute; inset: 0; z-index: -1; background: var(--img) center/contain no-repeat; }
 #tiles .tile:hover { opacity: 1; }
 #tiles .tile.sel { opacity: 1; transform: scale(1.06); z-index: 2; box-shadow: 0 0 0 calc(3 * var(--u)) var(--accent), 0 12px 30px rgba(0,0,0,.6); }
 #tiles .tile .card { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; padding: calc(10 * var(--u)); text-align: center;
@@ -135,7 +166,7 @@ body.tilesview #rowWrap, body.tilesview #info { display: none; }
   background: linear-gradient(transparent, rgba(0,0,0,.85)); opacity: 0; transition: opacity .15s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #tiles .tile.sel .name, #tiles .tile:hover .name { opacity: 1; }
 #tiles .tile .fav { position: absolute; top: calc(6 * var(--u)); left: calc(8 * var(--u)); color: #ffd166; text-shadow: 0 1px 4px #000; }
-#tiles .tile .badge { position: absolute; top: calc(6 * var(--u)); right: calc(6 * var(--u)); background: var(--beam); color: #2a1702; font-size: calc(11 * var(--u)); font-weight: 800; padding: 1px 6px; border-radius: 999px; }
+#tiles .tile .badge { position: absolute; top: calc(6 * var(--u)); left: 50%; transform: translateX(-50%); background: var(--beam); color: #2a1702; font-size: calc(11 * var(--u)); font-weight: 800; padding: 1px 6px; border-radius: 999px; }
 #btnView svg { width: .95em; height: .95em; vertical-align: -.1em; }
 /* ---------- list view: the games in a column on the right, the picture and details stay ---------- */
 body.listview { --shelf-h: calc(44 * var(--u)); }
@@ -147,7 +178,7 @@ body.listview #info { right: 46%; }
 #gameList .gi { display: flex; align-items: center; gap: calc(12 * var(--u)); padding: calc(6 * var(--u)) calc(10 * var(--u)); border-radius: calc(8 * var(--u));
   font-size: calc(19 * var(--u)); color: #c9d4df; cursor: pointer; }
 #gameList .gi:hover { background: rgba(255,255,255,.05); }
-#gameList .gi.sel { background: rgba(95, 214, 204, .16); color: var(--text); box-shadow: inset calc(3 * var(--u)) 0 0 var(--accent); }
+#gameList .gi.sel { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text); box-shadow: inset calc(3 * var(--u)) 0 0 var(--accent); }
 #gameList .gi .thumb { flex: none; width: calc(30 * var(--u)); height: calc(40 * var(--u)); border-radius: 4px; object-fit: cover; background: rgba(255,255,255,.06); }
 #gameList .gi .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #gameList .gi .s { flex: none; color: var(--muted); font-size: .78em; }
@@ -168,7 +199,7 @@ body.listview #info { right: 46%; }
 #row { position: absolute; left: calc(64 * var(--u)); top: calc(24 * var(--u)); height: var(--row-h); display: flex; align-items: flex-end; gap: calc(18 * var(--u));
   transition: transform .28s cubic-bezier(.2,.7,.2,1); will-change: transform; }
 .item { position: relative; flex: none; height: calc(var(--row-h) * .78); width: calc(var(--row-h) * .78 * var(--ar, .7)); border-radius: calc(10 * var(--u)); overflow: hidden;
-  background: #142233 center/cover no-repeat; box-shadow: 0 8px 24px rgba(0,0,0,.45); opacity: .62; transform-origin: bottom left;
+  background: #0b1522 center/contain no-repeat; box-shadow: 0 8px 24px rgba(0,0,0,.45); opacity: .62; transform-origin: bottom left;
   transition: height .22s ease, width .22s ease, opacity .22s ease, box-shadow .22s; cursor: pointer; }
 .item.sel { opacity: 1; height: var(--row-h); width: calc(var(--row-h) * var(--ar, .7)); box-shadow: 0 0 0 calc(3 * var(--u)) var(--accent), 0 14px 40px rgba(0,0,0,.6); z-index: 2; }
 .item:hover:not(.sel) { opacity: .9; }
@@ -191,7 +222,6 @@ dialog::backdrop { background: rgba(3,7,14,.7); backdrop-filter: blur(8px); }
 dialog h2 { margin: 0 0 calc(18 * var(--u)); font-size: calc(30 * var(--u)); }
 .set-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: calc(12 * var(--u)) 0; border-bottom: 1px solid var(--line); }
 .set-row span { color: var(--muted); }
-#settings h3:first-of-type { margin-top: 0; }
 dialog a { color: var(--accent); }
 #catSearch { flex: 1; min-width: 0; }
 /* Adding a port: the program it starts, with a quiet Change beside it */
@@ -202,7 +232,7 @@ dialog a { color: var(--accent); }
 /* Port catalogue: how well each one runs, in a column of its own so it's easy to scan. */
 .emu-cat .tier { flex: none; width: calc(130 * var(--u)); text-align: right; font-size: .85em; font-weight: 600; margin-left: auto; }
 #portTier { font-size: .8em; font-weight: 700; align-self: center; margin: 0 calc(4 * var(--u)) 0 calc(-4 * var(--u)); text-shadow: 0 1px 6px rgba(0,0,0,.6); }
-.tier.fully { color: var(--accent); }
+.tier.fully { color: var(--ok); }
 .hb-mark { height: .95em; width: auto; vertical-align: -.12em; margin-left: .4em; }
 #portTier.harbour { color: #fff; }
 #portTier.harbour .hb-mark { margin: 0 .35em 0 0; }
@@ -284,7 +314,7 @@ dialog :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .slider output { min-width: 2.5em; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
 
 /* Emulator badge: grey = missing, yellow = update, teal = up to date */
-.emu-badge, .emu-chip { --c: var(--accent); color: var(--c); }
+.emu-badge, .emu-chip { --c: var(--ok); color: var(--c); }
 .emu-badge.missing, .emu-chip.missing { --c: #7d8896; }
 .emu-badge.update, .emu-chip.update { --c: var(--beam); }
 .emu-badge { position: absolute; right: calc(6 * var(--u)); bottom: calc(6 * var(--u)); width: calc(26 * var(--u)); height: calc(26 * var(--u));
@@ -299,11 +329,29 @@ dialog :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .emu-source label.check { display: flex; align-items: center; gap: 8px; color: var(--text); }
 
 /* Updates window */
-#updatePill { border: 0; cursor: pointer; }
+#updatePill { border: 0; cursor: pointer; display: inline-flex; align-items: center; gap: calc(8 * var(--u)); position: relative; overflow: hidden; }
 #updatePill:hover { filter: brightness(1.12); }
+#updatePill.new .ico, #updatePill.new .bar, #updatePill.current .bar, #updatePill.offline .ico, #updatePill.offline .bar { display: none; }
+/* No internet: grey, a status colour like the rest (the same on every console's tab). */
+#updatePill.offline { background: #3a4452; color: #c3ccd6; }
+/* Nothing to update: teal with a tick. A status colour, so it stays teal on every console's tab. */
+#updatePill.current { background: #5fd6cc; color: #06121c; padding-left: calc(8 * var(--u)); }
+#updatePill.current .ico { background: #06121c; color: #5fd6cc; font-size: calc(10 * var(--u)); }
+/* While updates run, the pill looks like an activity chip: glass, a spinner (or a tick, or a pause sign), a progress line. */
+#updatePill.status { background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(14px); color: var(--text); font-weight: 600;
+  padding-left: calc(8 * var(--u)); max-width: calc(420 * var(--u)); white-space: nowrap; animation: actIn .3s ease; }
+#updatePill .txt { overflow: hidden; text-overflow: ellipsis; }
+#updatePill .ico { flex: none; width: calc(16 * var(--u)); height: calc(16 * var(--u)); border-radius: 50%; display: grid; place-items: center; font-size: calc(9 * var(--u)); font-weight: 800; }
+#updatePill.busy:not(.paused) .ico { border: 2px solid rgba(255,255,255,.18); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+#updatePill.busy.paused .ico { color: var(--beam); }
+#updatePill.ok .ico { background: var(--ok); color: #06121c; font-size: calc(11 * var(--u)); }
+#updatePill .bar { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--accent); transition: width .3s ease; }
 .upd-list { display: grid; gap: 8px; max-height: 55vh; overflow: auto; }
 .upd-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; }
 .upd-name { display: grid; gap: 2px; }
+.sv-on { color: #5fd6cc; }
+#savesBody .sv-back { display: flex; margin-top: calc(6 * var(--u)); }
+#savesBody input { margin-top: calc(6 * var(--u)); width: calc(260 * var(--u)); letter-spacing: .12em; text-transform: uppercase; }
 .upd-name small { color: var(--muted); }
 .upd-name .upd-how { color: var(--beam); }
 /* Updates window: the running update's button spins and shows its progress; the rest wait, dimmed. */
@@ -313,7 +361,10 @@ dialog :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* First start */
 #welcomeDlg { max-width: calc(560 * var(--u)); text-align: center; }
 #welcomeDlg .welcome-set { text-align: left; margin-top: calc(10 * var(--u)); }
-#welcomeDlg .welcome-set .set-row > span:first-child { display: grid; gap: 2px; }
+/* Updates: the ↑ of the one already first stays selectable (so spamming A is safe) but looks switched off. */
+.upd-up.at-top { opacity: .4; cursor: default; }
+/* A setting's name with its hint underneath (the hint is the <small>), here and in Settings. */
+.set-row > span:first-child { display: grid; gap: 2px; }
 #welcomeDlg .welcome-set small { color: var(--dim); font-size: .8em; }
 #welcomeDlg:has(#welcomeSetup:not([hidden])) { max-width: calc(700 * var(--u)); }
 #welcomeDlg .choice { position: relative; padding-right: calc(52 * var(--u)); }
@@ -343,8 +394,8 @@ dialog :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .dir-pick { display: flex; align-items: center; gap: calc(12 * var(--u)); min-width: 0; }
 .dir-pick small { color: var(--muted); max-width: calc(300 * var(--u)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
 #addEmuPick .dlg-actions button { white-space: nowrap; padding-left: calc(14 * var(--u)); padding-right: calc(14 * var(--u)); }
-.emu-catalog .emu-group { margin: calc(14 * var(--u)) 0 calc(4 * var(--u)); font-size: .78em; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
-.emu-catalog .emu-group:first-child { margin-top: 0; }
+.emu-catalog .emu-group, .upd-list .emu-group { margin: calc(14 * var(--u)) 0 calc(4 * var(--u)); font-size: .78em; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+.emu-catalog .emu-group:first-child, .upd-list .emu-group:first-child { margin-top: 0; }
 /* windows stop above the control hints */
 dialog[open] { max-height: calc(100vh - 90 * var(--u)); }  /* still centred: the space left below clears the hints */
 .btn-pair { display: flex; gap: calc(10 * var(--u)); }
@@ -364,3 +415,79 @@ dialog[open] { max-height: calc(100vh - 90 * var(--u)); }  /* still centred: the
 .vid-list label.has small { margin-left: auto; color: var(--muted); font-size: .8em; }
 .roms-one { display: flex; align-items: center; gap: calc(12 * var(--u)); margin-top: calc(14 * var(--u)); color: var(--muted); }
 .roms-one select { flex: 1; min-width: 0; }
+
+/* Feedback */
+.fb-kinds { display: flex; gap: calc(8 * var(--u)); margin-bottom: calc(14 * var(--u)); }
+.fb-kinds button.on { background: var(--accent); color: #0b1a2c; border-color: var(--accent); font-weight: 700; }
+#fbText { display: block; width: 100%; box-sizing: border-box; resize: vertical; min-height: calc(140 * var(--u)); font: inherit; color: inherit;
+  background: rgba(0,0,0,.35); border: 1px solid var(--line); border-radius: 8px; padding: calc(10 * var(--u)); }
+/* Top left, just after the clock (which keeps its width so the button doesn't shift as the time changes). */
+#btnFeedback { font-size: calc(20 * var(--u) * var(--ui)); color: rgba(238, 243, 248, .88); margin-left: calc(-18 * var(--u)); }
+#btnFeedback:hover, #btnFeedback:focus-visible { color: #fff; }
+#btnFeedback svg { filter: drop-shadow(0 1px 4px rgba(0, 0, 0, .7)); }
+#clock { font-variant-numeric: tabular-nums; min-width: 4.6em; }
+
+/* Settings: wider, a tab per kind of setting down the left, one page at a time on the right (no scrolling to find things). */
+#settings { width: min(calc(1080 * var(--u)), 94vw); }
+#settings .set-body { display: grid; grid-template-columns: calc(190 * var(--u)) 1fr; gap: calc(28 * var(--u)); }
+#settings .set-tabs { display: flex; flex-direction: column; gap: calc(4 * var(--u)); border-right: 1px solid var(--line); padding-right: calc(18 * var(--u)); }
+#settings .set-tabs button { text-align: left; background: transparent; border: 0; color: var(--muted); font-weight: 600; padding: calc(11 * var(--u)) calc(14 * var(--u)); border-radius: calc(10 * var(--u)); }
+#settings .set-tabs button:hover { color: var(--text); background: rgba(255,255,255,.05); }
+#settings .set-tabs button.on { color: var(--text); background: rgba(255,255,255,.08); box-shadow: inset 3px 0 0 var(--accent); }
+#settings .set-pages { min-height: calc(470 * var(--u)); }
+#settings .set-page .set-row:first-child { padding-top: calc(4 * var(--u)); }
+#settings .set-pages { max-height: calc(100vh - 300 * var(--u)); overflow: auto; }
+#savesPage .sv-head { display: flex; align-items: center; justify-content: space-between; gap: calc(20 * var(--u)); margin-bottom: calc(10 * var(--u)); }
+#savesPage .sv-head .note { margin: 0; }
+#savesPage .emu-catalog { max-height: none; overflow: visible; }
+#savesPage .sv-head button { white-space: nowrap; flex: none; }
+.sv-waiting { color: #f2c14e; }
+.sv-conflict, .sv-missing { color: #ff8a7a; }
+.sv-alone { color: var(--muted); }
+
+/* Beta, overlapping the bottom of the logo's cards a little (clear of the wordmark and clock): so a bug reads as early days. In the accent. */
+.brand { position: relative; }
+.brand .beta { position: absolute; left: calc(17 * var(--u)); top: calc(100% - 6 * var(--u)); transform: translateX(-50%); font-size: calc(9 * var(--u));
+  font-weight: 800; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  border-radius: 999px; padding: calc(1 * var(--u)) calc(6 * var(--u)); line-height: 1.3; background: rgba(7, 8, 12, .55); }
+
+/* Controller glyphs (applyGlyphs): the button to press, in the controller's own labels. Face buttons are coloured discs
+   (Xbox and PlayStation colours), the rest small pills. A badge sits on an icon button's corner; inline ones lead text. */
+.pg { display: inline-grid; place-items: center; min-width: 1.6em; height: 1.6em; padding: 0 .35em; border-radius: 999px; font-weight: 800;
+  font-size: .62em; line-height: 1; letter-spacing: .02em; color: #0b1118; background: #d6dee8; border: 0; box-shadow: 0 1px 3px rgba(0,0,0,.5);
+  text-shadow: none; white-space: nowrap; font-family: inherit; }
+.pg-a, .pg-b, .pg-x, .pg-y { width: 1.6em; padding: 0; }
+.pg-xbox.pg-a { background: #5dc356; } .pg-xbox.pg-b { background: #ee5a52; } .pg-xbox.pg-x { background: #4a90e2; } .pg-xbox.pg-y { background: #f2c14e; }
+.pg-ps.pg-a { background: #6f9bf0; } .pg-ps.pg-b { background: #ee5a52; } .pg-ps.pg-x { background: #e586c9; } .pg-ps.pg-y { background: #4fcf9e; }
+[data-pad] { position: relative; }
+.pg-badge { position: absolute; right: -0.7em; bottom: -0.55em; font-size: calc(10.5 * var(--u) * var(--ui, 1)); pointer-events: none; height: 1.55em; min-width: 1.55em; }
+#updatePill .pg-badge { right: auto; left: -0.6em; }
+.pg-inline { margin-right: .5em; font-size: .9em; vertical-align: middle; }
+#hints .pg { margin-right: .3em; font-size: calc(13 * var(--u)); }
+#settings .set-tabkeys { display: none; align-items: center; gap: calc(6 * var(--u)); margin-bottom: calc(8 * var(--u)); color: var(--dim); font-size: calc(13 * var(--u)); }
+body.pad #settings .set-tabkeys { display: flex; }
+#settings .set-tabkeys .pg { font-size: calc(17 * var(--u)); margin: 0; }
+#updatePill .pg-inline { font-size: .72em; margin-right: .45em; }
+
+/* Pad: Play shows A (in place of its triangle); LB and RB sit at the two ends of the console tabs. */
+body.pad #btnPlay .tri { display: none; }
+#btnPlay .pg-inline { font-size: .8em; }
+#top > .tabkey { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; pointer-events: none; }
+#top > .tabkey.l { left: 25%; } #top > .tabkey.r { right: 25%; }
+.tabkey .pg { font-size: calc(13 * var(--u)); margin: 0; }
+
+/* What's new */
+#notesBody { max-height: 60vh; overflow: auto; }
+#notesBody ul { margin: calc(4 * var(--u)) 0 calc(12 * var(--u)); padding-left: 1.2em; }
+#notesBody li { margin: calc(5 * var(--u)) 0; color: var(--muted); }
+#notesBody li b, #notesBody p b { color: var(--text); }
+#notesBody p { color: var(--muted); }
+
+/* List and tile views: the game's art or video in a framed window top left (like an ES-DE theme), its details
+   under it, the games on the right, the calm background behind everything. */
+body.listview #hero, body.tilesview #hero { bottom: 0; }
+body.listview .hero-layer, body.listview #heroVideo, body.tilesview .hero-layer, body.tilesview #heroVideo {
+  inset: auto; left: calc(64 * var(--u)); top: calc(100 * var(--u)); width: calc(54vw - 152 * var(--u)); height: auto; aspect-ratio: 16 / 9;
+  border-radius: calc(14 * var(--u)); box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 18px 50px rgba(0,0,0,.55); }
+body.listview .hero-layer.soft, body.tilesview .hero-layer.soft { transform: none; }
+body.listview .hero-shade, body.tilesview .hero-shade { display: none; }

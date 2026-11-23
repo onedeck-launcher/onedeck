@@ -28,7 +28,7 @@
 Windows 10 and 11. Download the zip from [Releases](https://github.com/onedeck-launcher/onedeck/releases), unzip, run
 `OneDeck.exe`. If Windows warns you: **More info → Run anyway**.
 
-Linux: coming soon.
+Linux: download the AppImage, allow it to run as a program, open it. Windows-only ports run through Proton.
 
 OneDeck doesn't include any games or system files: bring your own. Not affiliated with any console maker.
 
